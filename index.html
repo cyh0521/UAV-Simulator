@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>島嶼航線｜無人機飛行實戰模擬</title>
+
+  <!-- Local Three.js and GSAP -->
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/gsap.min.js"></script>
+
+  <link rel="stylesheet" href="style.css?v=3.14" />
+</head>
+<body>
+  <!-- 3D WebGL Viewport -->
+  <div id="canvas-container"></div>
+
+  <!-- Subtle Airflow Wind-Streak Canvas Overlay -->
+  <canvas id="speed-lines-canvas"></canvas>
+
+  <!-- Real UAV VTX Video Link Grain, Scanlines & Optical Vignette -->
+  <canvas id="vtx-overlay-canvas"></canvas>
+
+  <!-- Visual Overlays -->
+  <div id="fpv-overlay" class="chase-mode"></div>
+  <div id="damage-flash"></div>
+  <div id="gate-flash"></div>
+
+  <!-- Center Dynamic Artificial Horizon & Pitch Ladder -->
+  <div class="hud-center-reticle" id="reticle-container">
+    <svg id="horizon-svg" viewBox="-180 -140 360 280">
+      <circle cx="0" cy="0" r="96" fill="none" stroke="rgba(0, 240, 255, 0.28)" stroke-width="1.2" stroke-dasharray="4 6" />
+      <path d="M -42 0 L -14 0 L -14 6 M 42 0 L 14 0 L 14 6" fill="none" stroke="#00f0ff" stroke-width="2.2" stroke-linecap="round" />
+      <circle cx="0" cy="0" r="2.5" fill="#00f0ff" />
+
+      <g id="horizon-dynamic-group">
+        <line x1="-85" y1="0" x2="-22" y2="0" stroke="rgba(16, 185, 129, 0.85)" stroke-width="2" />
+        <line x1="22" y1="0" x2="85" y2="0" stroke="rgba(16, 185, 129, 0.85)" stroke-width="2" />
+        <g stroke="rgba(0, 240, 255, 0.65)" stroke-width="1.5" fill="none">
+          <path d="M -28 -35 L -12 -35 M 12 -35 L 28 -35" />
+          <path d="M -20 -70 L -10 -70 M 10 -70 L 20 -70" />
+          <path d="M -28 35 L -12 35 M 12 35 L 28 35" stroke-dasharray="3 3" />
+          <path d="M -20 70 L -10 70 M 10 70 L 20 70" stroke-dasharray="3 3" />
+        </g>
+      </g>
+    </svg>
+
+    <!-- Military Downward Optic Reticle (Active in Downward Camera View) -->
+    <svg id="nadir-optics-svg" viewBox="-240 -180 480 360" class="hidden">
+      <!-- Outer Corner Brackets -->
+      <g class="reticle-corner-brackets" stroke="rgba(0, 240, 255, 0.7)" stroke-width="2" fill="none">
+        <path d="M -210 -140 L -230 -140 L -230 -120" />
+        <path d="M 210 -140 L 230 -140 L 230 -120" />
+        <path d="M -210 140 L -230 140 L -230 120" />
+        <path d="M 210 140 L 230 140 L 230 120" />
+      </g>
+
+      <!-- Center MIL-Grid Crosshairs -->
+      <g stroke="rgba(0, 240, 255, 0.75)" stroke-width="1.2">
+        <!-- Horizontal stadia lines -->
+        <line x1="-150" y1="0" x2="-16" y2="0" />
+        <line x1="16" y1="0" x2="150" y2="0" />
+        <!-- Vertical stadia lines -->
+        <line x1="0" y1="-120" x2="0" y2="-16" />
+        <line x1="0" y1="16" x2="0" y2="120" />
+        
+        <!-- Center aiming circle -->
+        <circle cx="0" cy="0" r="14" fill="none" stroke="rgba(0, 240, 255, 0.85)" stroke-width="1.5" />
+        <circle cx="0" cy="0" r="2" fill="#00f0ff" stroke="none" />
+
+        <!-- Mil tick marks along Horizontal line -->
+        <line x1="-120" y1="-6" x2="-120" y2="6" stroke-width="1.4" />
+        <line x1="-90" y1="-4" x2="-90" y2="4" />
+        <line x1="-60" y1="-6" x2="-60" y2="6" stroke-width="1.4" />
+        <line x1="-30" y1="-4" x2="-30" y2="4" />
+        <line x1="30" y1="-4" x2="30" y2="4" />
+        <line x1="60" y1="-6" x2="60" y2="6" stroke-width="1.4" />
+        <line x1="90" y1="-4" x2="90" y2="4" />
+        <line x1="120" y1="-6" x2="120" y2="6" stroke-width="1.4" />
+
+        <!-- Mil tick marks along Vertical line -->
+        <line x1="-6" y1="-90" x2="6" y2="-90" stroke-width="1.4" />
+        <line x1="-4" y1="-60" x2="4" y2="-60" />
+        <line x1="-6" y1="-30" x2="6" y2="-30" stroke-width="1.4" />
+        <line x1="-6" y1="30" x2="6" y2="30" stroke-width="1.4" />
+        <line x1="-4" y1="60" x2="4" y2="60" />
+        <line x1="-6" y1="90" x2="6" y2="90" stroke-width="1.4" />
+      </g>
+
+      <!-- Dynamic Wind Deflection Vector (Subtle Deflection Pip, Zero Text Clutter on Reticle) -->
+      <g id="nadir-wind-group">
+        <line id="nadir-wind-line" x1="0" y1="0" x2="0" y2="0" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="3 3" />
+        <circle id="nadir-wind-pip" cx="0" cy="0" r="4" fill="none" stroke="#f59e0b" stroke-width="1.6" />
+      </g>
+
+      <!-- CCIP Azimuth Steering Line (ASL / Bomb Fall Line) -->
+      <g id="nadir-ccip-group" style="display: none;">
+        <line id="nadir-ccip-line" x1="0" y1="0" x2="0" y2="0" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="4 3" stroke-linecap="round" />
+        <circle id="nadir-ccip-pip" cx="0" cy="0" r="5" fill="none" stroke="#ef4444" stroke-width="1.8" />
+        <circle id="nadir-ccip-dot" cx="0" cy="0" r="1.5" fill="#ef4444" />
+        <text id="nadir-ccip-lbl" x="0" y="0" fill="#ef4444" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700">CCIP</text>
+      </g>
+
+      <!-- Off-Screen Target Pointers (Tactical Target Cueing) -->
+      <g id="nadir-offscreen-group"></g>
+
+      <!-- Optic Overlay Text Telemetry (Pure Military Outline OSD, Zero Background Occlusion) -->
+      <!-- Top Left: EO-NADIR 90° & Sensor Mode -->
+      <g id="nadir-box-tl">
+        <text x="-225" y="-121" fill="#00f0ff" font-size="11" font-family="'JetBrains Mono', monospace" font-weight="700">EO-NADIR 90°</text>
+        <text x="-225" y="-106" fill="#38bdf8" font-size="9.5" font-family="'JetBrains Mono', monospace" font-weight="600">
+          MODE: <tspan id="nadir-sensor-val">VIS-RGB</tspan> <tspan fill="rgba(255,255,255,0.7)" font-size="8.5">[X]</tspan>
+        </text>
+      </g>
+
+      <!-- Top Right: Zoom MAG, Wind Telemetry & Link/Battery -->
+      <g id="nadir-box-tr">
+        <text x="225" y="-121" text-anchor="end" fill="#00f0ff" font-size="11" font-family="'JetBrains Mono', monospace" font-weight="800">
+          MAG: <tspan id="nadir-mag-val">1.0X</tspan> <tspan fill="rgba(255,255,255,0.7)" font-size="8.5">[Z]</tspan> | <tspan id="nadir-wind-val" fill="#f59e0b">W: 0.0m/s</tspan>
+        </text>
+        <text x="225" y="-106" text-anchor="end" fill="#cbd5e1" font-size="9.5" font-family="'JetBrains Mono', monospace">
+          <tspan id="nadir-link-val">VTX: -42dBm</tspan> | <tspan id="nadir-bat-val">22.8V</tspan>
+        </text>
+      </g>
+
+      <!-- Bottom Left: AGL & GPS Coordinates -->
+      <g id="nadir-box-bl">
+        <text x="-225" y="117" fill="#00f0ff" font-size="11" font-family="'JetBrains Mono', monospace" font-weight="700">
+          AGL: <tspan id="nadir-agl-val">0.0m</tspan>
+        </text>
+        <text x="-225" y="132" fill="#38bdf8" font-size="9" font-family="'JetBrains Mono', monospace" font-weight="600">
+          GPS: <tspan id="nadir-gps-val">N 24°58'42.0" E 121°31'15.0"</tspan>
+        </text>
+      </g>
+
+      <!-- Bottom Right: Bomb Arming Safety & CCIP -->
+      <g id="nadir-box-br">
+        <text x="225" y="117" text-anchor="end" fill="#cbd5e1" font-size="11" font-family="'JetBrains Mono', monospace" font-weight="700">
+          ARM: <tspan id="nadir-arm-status" fill="#10b981">READY (≥6m)</tspan>
+        </text>
+        <text x="225" y="132" text-anchor="end" fill="#94a3b8" font-size="9" font-family="'JetBrains Mono', monospace" font-weight="600">
+          CCIP: <tspan fill="#38bdf8">PREDICT</tspan>
+        </text>
+      </g>
+    </svg>
+  </div>
+
+  <!-- Center GSAP Motion Graphics Announcements -->
+  <div id="center-announcement">
+    <div class="announce-main" id="announce-main">READY</div>
+    <div class="announce-sub" id="announce-sub">準備起飛</div>
+  </div>
+
+  <!-- Landing Zone Stability Progress -->
+  <div id="landing-indicator">
+    <div class="landing-title" id="landing-status-text">進入市區降落坪 — 請保持低速平穩接地</div>
+    <div class="landing-bar-bg">
+      <div id="landing-bar-fill"></div>
+    </div>
+  </div>
+
+  <!-- Main Avionics HUD Layer -->
+  <div id="hud-layer">
+    <!-- Top HUD Row -->
+    <div class="hud-top">
+      <!-- Top Left: Session & Race Timer -->
+      <div class="hud-card session-info">
+        <div class="session-header">
+          <span class="mode-badge" id="hud-mode-badge">飛行操控訓練</span>
+          <span class="player-badge"><span class="rec-dot"></span><span id="hud-player-label">PLAYER 1</span></span>
+        </div>
+        <div class="timer-row">
+          <span class="timer-label">FLIGHT TIME</span>
+          <span class="timer-value" id="hud-timer">00:00.00</span>
+        </div>
+        <div class="sub-stats-row">
+          <span><span id="hud-progress-label">任務進度</span>: <strong id="hud-gate-progress">1 / 6</strong></span>
+          <span id="hud-penalty-wrap"><span id="hud-penalty-label">碰撞</span>: <strong id="hud-penalty" style="color: var(--amber);">0 次</strong></span>
+          <span id="hud-ghost-delta-wrap" style="display: none;">差距: <strong id="hud-ghost-delta">0.00s</strong></span>
+        </div>
+      </div>
+
+      <!-- Top Center: 360 Compass Tape & Target Objective -->
+      <div class="hud-center-top">
+        <div class="compass-container">
+          <div class="compass-center-mark"></div>
+          <canvas id="compass-canvas" width="380" height="38"></canvas>
+          <div class="compass-heading-readout" id="hud-heading-text">000° N</div>
+        </div>
+        <div class="objective-banner" id="hud-objective-banner">
+          <span>航線導引：</span>
+          <span class="gate-pill" id="hud-next-target">穿過 1 號空中檢查門</span>
+        </div>
+
+        <!-- Interactive Training Mode Guide Card -->
+        <div id="training-guide-card" class="training-card">
+          <div class="training-card-header">
+            <span class="training-badge" id="training-step-badge">TASK 01 / 06</span>
+            <span class="training-title" id="training-task-title">垂直起降與定高懸停</span>
+          </div>
+          <div class="training-instruction" id="training-instruction">
+            按住 <kbd>W</kbd> 垂直爬升至 10 公尺，放開或按 <kbd>Space</kbd> 保持平穩懸停 2 秒
+          </div>
+          <div class="training-progress-row">
+            <div class="training-bar-wrap">
+              <div class="training-bar-fill" id="training-bar-fill" style="width: 0%;"></div>
+            </div>
+            <span class="training-status-text" id="training-status-text">懸停進度: 0%</span>
+          </div>
+        </div>
+
+        <!-- Military Tactical Strike Mode Command Banner -->
+        <div id="tactical-hud-card" class="tactical-card hidden">
+          <div class="tactical-header">
+            <span class="tac-ord-badge" id="tactical-bomb-count">剩餘持彈 2 / 2</span>
+            <span class="tac-ccip-badge" id="tactical-ccip-info">CCIP 解算: 自動預測</span>
+          </div>
+          <div class="tactical-targets-row" id="tactical-targets-row">
+            <span class="tac-chip" id="tac-chip-tank">TANK 坦克 0/2</span>
+            <span class="tac-chip" id="tac-chip-radar">RADAR 雷達 0/1</span>
+            <span class="tac-chip" id="tac-chip-depot">DEPOT 彈藥庫 0/1</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom HUD Row -->
+    <div class="hud-bottom">
+      <!-- Bottom Left: Avionics Telemetry -->
+      <div class="hud-card" id="hud-telemetry-card">
+        <div class="telemetry-grid">
+          <div class="metric-box">
+            <div class="metric-label">
+              <span>水平地速 GS</span>
+              <span id="hud-mps">0.0 m/s</span>
+            </div>
+            <div class="metric-value">
+              <span id="hud-speed">0</span><span class="metric-unit">km/h</span>
+            </div>
+            <div class="meter-bar">
+              <div class="meter-fill" id="bar-speed"></div>
+            </div>
+          </div>
+
+          <div class="metric-box">
+            <div class="metric-label">
+              <span>離地高度 AGL</span>
+              <span>上限 120m</span>
+            </div>
+            <div class="metric-value">
+              <span id="hud-altitude">0.0</span><span class="metric-unit">m</span>
+            </div>
+            <div class="meter-bar">
+              <div class="meter-fill" id="bar-altitude" style="background: var(--emerald);"></div>
+            </div>
+          </div>
+
+          <div class="metric-box">
+            <div class="metric-label">
+              <span>垂直升降 VSI</span>
+              <span id="hud-throttle-state">自動定高</span>
+            </div>
+            <div class="metric-value">
+              <span id="hud-vspeed">0.0</span><span class="metric-unit">m/s</span>
+            </div>
+          </div>
+
+          <div class="metric-box">
+            <div class="metric-label">
+              <span>推力與姿態 ATT</span>
+              <span id="hud-boost-status" style="color: var(--cyan);">CRUISE</span>
+            </div>
+            <div class="metric-value" style="font-size: 16px; margin-top: 6px;">
+              <span id="hud-attitude">P: 0° / R: 0°</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Right: Live Coastal Tactical Radar Minimap -->
+      <div class="hud-card minimap-card">
+        <div class="minimap-header">
+          <span id="minimap-title-text">城市航圖 (北方朝上)</span>
+          <strong id="hud-coords">X: 0m Z: 0m</strong>
+        </div>
+        <div class="minimap-canvas-wrap" id="minimap-trigger" title="點擊展開全螢幕城市航圖 (M)">
+          <canvas id="minimap-canvas" width="230" height="230"></canvas>
+          <div class="minimap-expand-hint">按 M 展開全圖</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full-Screen Tactical Map Modal (M Key) -->
+  <div id="fullmap-modal">
+    <div class="fullmap-box">
+      <div class="fullmap-top">
+        <div class="fullmap-title">
+          <span>AERO-X 台灣城市航圖</span>
+        </div>
+        <button class="secondary-btn" id="btn-close-map" style="padding: 6px 16px; font-size: 13px;">
+          關閉地圖 (M / Esc)
+        </button>
+      </div>
+      <div class="fullmap-body">
+        <div class="fullmap-canvas-container">
+          <canvas id="fullmap-canvas" width="660" height="520"></canvas>
+        </div>
+        <div class="fullmap-legend">
+          <div style="font-weight: 700; color: #fff; border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px;">
+            城市地標與航線圖例
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #00f0ff; box-shadow: 0 0 8px #00f0ff;"></span>
+            <span>無人機即時位置與機頭航向</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
+            <span>下一個目標空中檢查門 (Next Gate)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #3b82f6;"></span>
+            <span>後續待通過檢查門</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #64748b;"></span>
+            <span>已完成通過之檢查門</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #f59e0b;"></span>
+            <span>市區起降廣場 (H-Pad 起飛與最終降落區)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #977c9d;"></span>
+            <span>住宅、商辦與公共設施</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #395c4a;"></span>
+            <span>公園與綠地</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background: #e6ad57;"></span>
+            <span>鐵路與中央車站</span>
+          </div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-subtle); font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+            <strong>台灣城中街區設計</strong><br/>
+            參考 Google Map 實景街景，融合機車停等區、黃黑斑馬紋電線桿與空中電纜、台電變電箱、中華郵政雙色郵筒、頂樓鐵皮加蓋與不鏽鋼水塔，以及滿街林立的超商小吃突出霓虹招牌！按 <strong>T 鍵</strong> 可隨時切換「夏日晴空 / 城市夕陽 / 靜謐夏夜」欣賞夜間發光招牌！
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="pause-modal" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 class="modal-title" id="pause-title">飛行暫停</h2>
+        <div class="modal-subtitle">飛行設定與操控說明</div>
+      </div>
+      <div class="hud-card quick-controls">
+        <div class="btn-group">
+          <button class="hud-btn active" id="btn-time" title="切換天色 (T)">
+            天色: <span id="time-label">夏日晴空</span> <span class="key-tag">T</span>
+          </button>
+          <button class="hud-btn" id="btn-weather" title="切換氣候 (Y)">
+            氣候: <span id="weather-label">晴朗無風</span> <span class="key-tag">Y</span>
+          </button>
+          <button class="hud-btn active" id="btn-camera" title="切換追蹤 / 第一人稱 / 垂直下視 (C)">
+            視角: <span id="cam-label">追蹤視角</span> <span class="key-tag">C</span>
+          </button>
+          <button class="hud-btn hidden" id="btn-zoom" title="切換垂直下視倍率 1x / 2x / 4x (Z)">
+            變焦: <span id="zoom-label">1.0X</span> <span class="key-tag">Z</span>
+          </button>
+          <button class="hud-btn" id="btn-sensor" title="切換鏡頭感光模式：彩色 / 白熱熱成像 / 微光夜視 (X)">
+            感光: <span id="sensor-label">彩色</span> <span class="key-tag">X</span>
+          </button>
+          <button class="hud-btn" id="btn-map" title="開啟全螢幕城市航圖 (M)">
+            全圖 <span class="key-tag">M</span>
+          </button>
+        </div>
+        <div class="btn-group">
+          <button class="hud-btn" id="btn-flight-mode" title="切換飛行物理手感 (G)">
+            飛控: <span id="fmode-label">自穩定高</span> <span class="key-tag">G</span>
+          </button>
+          <button class="hud-btn" id="btn-keymap" title="切換雙手或單手鍵位配置 (K)">
+            鍵位: <span id="keymap-label">雙手推薦</span> <span class="key-tag">K</span>
+          </button>
+          <button class="hud-btn" id="btn-reset" title="重置回上一個檢查點或起飛點 (R)">
+            重置 <span class="key-tag">R</span>
+          </button>
+          <button class="hud-btn active" id="btn-audio" title="開關螺旋槳與提示音效 (N)">
+            音效 <span class="key-tag">N</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="controls-hud-wrapper">
+        <div class="controls-visualizer" id="controls-visualizer">
+          <div class="stick-cluster">
+            <div class="cluster-label" id="left-cluster-title">左手：升降與轉向</div>
+            <div class="key-row">
+              <div class="k-cap" id="key-top-l1">Q</div>
+              <div class="k-cap" id="key-top-l2">W</div>
+              <div class="k-cap" id="key-top-l3">E</div>
+            </div>
+            <div class="key-row">
+              <div class="k-cap" id="key-bot-l1">A</div>
+              <div class="k-cap" id="key-bot-l2">S</div>
+              <div class="k-cap" id="key-bot-l3">D</div>
+            </div>
+          </div>
+
+          <div class="controls-divider"></div>
+
+          <div class="stick-cluster">
+            <div class="cluster-label" id="right-cluster-title">右手：前後左右平移</div>
+            <div class="key-row">
+              <div class="k-cap" id="key-top-r1">↑</div>
+            </div>
+            <div class="key-row">
+              <div class="k-cap" id="key-bot-r1">←</div>
+              <div class="k-cap" id="key-bot-r2">↓</div>
+              <div class="k-cap" id="key-bot-r3">→</div>
+            </div>
+          </div>
+
+          <div class="controls-divider"></div>
+
+          <div class="shortcut-hints">
+            <div><strong>T</strong> 天色 | <strong>Y</strong> 氣候</div>
+            <div><strong>C</strong> 切換視角 | <strong>Space</strong> 懸停</div>
+            <div><strong id="boost-hint-key">Shift</strong> 衝刺 | <strong>R</strong> 重置</div>
+            <div><strong>B</strong> 投擲（野外戰場）</div>
+            <div><strong>M</strong> 航圖 | <strong>Esc</strong> 暫停／繼續</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cta-row">
+        <button class="primary-btn" id="btn-resume" type="button">繼續飛行 <span class="key-tag">Esc</span></button>
+        <button class="secondary-btn" id="btn-abort-tactical" type="button" hidden>中止任務並結算</button>
+        <button class="secondary-btn" id="btn-return-menu" type="button">回主選單</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="world-loading" aria-live="polite" role="status">
+    <div class="modal-panel">
+      <h2 class="modal-title" id="world-loading-title"></h2>
+      <progress aria-label="場景載入中"></progress>
+      <p class="modal-subtitle" id="world-loading-detail"></p>
+    </div>
+  </div>
+
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="menu-icon-training" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="12" rx="4"/><circle cx="8" cy="14" r="2"/><circle cx="16" cy="14" r="2"/><path d="M8 8V4m8 4V4m-5 13h2"/></symbol><symbol id="menu-icon-race" viewBox="0 0 24 24"><circle cx="12" cy="14" r="8"/><path d="M9 2h6m-3 0v4m5.5 2.5 2-2M12 10v4l3 2"/></symbol><symbol id="menu-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/></symbol><symbol id="menu-icon-sunset" viewBox="0 0 24 24"><path d="M2 18h20M5 22h14M7 15a5 5 0 0 1 10 0M12 3v3M4 8l2 2m14-2-2 2"/></symbol><symbol id="menu-icon-moon" viewBox="0 0 24 24"><path d="M21 14A9 9 0 0 1 10 3a9 9 0 1 0 11 11Z"/></symbol><symbol id="menu-icon-camera" viewBox="0 0 24 24"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 10 6-4v12l-6-4"/></symbol><symbol id="menu-icon-cloud" viewBox="0 0 24 24"><path d="M6 17a4 4 0 0 1 0-8 6 6 0 0 1 11-1 4.5 4.5 0 0 1 1 9Z"/></symbol><symbol id="menu-icon-rain" viewBox="0 0 24 24"><path d="M6 14a3 3 0 0 1 0-6 6 6 0 0 1 11-1 3.5 3.5 0 1 1 1 7H6Zm2 3-2 4m7-4-2 4m7-4-2 4"/></symbol><symbol id="menu-icon-fog" viewBox="0 0 24 24"><path d="M4 8h16M2 12h20M5 16h14M8 20h8"/></symbol><symbol id="menu-icon-wind" viewBox="0 0 24 24"><path d="M3 8h12a2 2 0 1 0-2-2M2 12h17a2 2 0 1 1-2 2M4 16h9a2 2 0 1 1-2 2"/></symbol><symbol id="menu-icon-battery" viewBox="0 0 24 24"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10v4M6 10v4m4-4v4m4-4v4"/></symbol><symbol id="menu-icon-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol><symbol id="menu-icon-start" viewBox="0 0 24 24"><path d="m8 4 13 8-13 8V4Z"/></symbol><symbol id="menu-icon-mission" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="16" rx="2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 11h6m-6 4h6"/></symbol><symbol id="menu-icon-chase" viewBox="0 0 24 24"><path d="m12 3 5 9-5-2-5 2 5-9ZM5 17h14m-11 4h8"/></symbol><symbol id="menu-icon-fpv" viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></symbol><symbol id="menu-icon-down" viewBox="0 0 24 24"><path d="M12 3v11m-5-5 5 5 5-5M3 18l9 3 9-3"/> </symbol></svg>
+  <!-- Main Menu / Mode Selection Modal -->
+  <div class="modal-backdrop" id="menu-modal">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h1 class="modal-title">島嶼航線</h1>
+        <p class="modal-subtitle">無人機飛行實戰模擬</p>
+      </div>
+
+      <!-- 3 Game Mode Cards -->
+      <div class="mode-cards-grid">
+        <div class="mode-select-card selected" data-mode="training">
+          <span class="mode-card-tag">MODE 01 // 新手必學</span>
+          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-training"></use></svg> 新手飛行訓練</div>
+          <div class="mode-card-desc">
+            循序漸進的操作教學！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。
+          </div>
+        </div>
+
+        <div class="mode-select-card" data-mode="versus_race">
+          <span class="mode-card-tag">MODE 02 // 雙人對決</span>
+          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-race"></use></svg> 雙人競速</div>
+          <div class="mode-card-desc">
+            Player 1 與 Player 2 輪流挑戰城市賽道！P2 飛行時將同場出現 P1 的「全息影子無人機」同屏較勁。
+          </div>
+        </div>
+
+        <div class="mode-select-card" data-mode="tactical_strike">
+          <span class="mode-card-tag" style="background: rgba(239, 68, 68, 0.22); border-color: #ef4444; color: #f87171;">MODE 03 // 實戰打擊</span>
+          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-mission"></use></svg> 戰場投彈</div>
+          <div class="mode-card-desc">
+            山谷前線任務。進入戰場後可查看任務簡報。
+          </div>
+        </div>
+      </div>
+
+      <!-- Flight Settings -->
+      <div class="menu-settings">
+        <div class="menu-setting-row">
+          <div class="setting-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 天色與時段 (T)</div>
+          <div class="option-pills" id="opt-time">
+            <button type="button" class="opt-pill active" data-val="day" aria-describedby="menu-summary-time" data-description="光線充足，適合辨識障礙與練習起降。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 白天</button>
+            <button type="button" class="opt-pill" data-val="sunset" aria-describedby="menu-summary-time" data-description="夕陽角度較低，陰影較長。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sunset"></use></svg> 黃昏</button>
+            <button type="button" class="opt-pill" data-val="night" aria-describedby="menu-summary-time" data-description="環境光線較弱，可依燈光和儀表辨識方向。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-moon"></use></svg> 夜晚</button>
+          </div>
+          <div class="weather-impact-summary" id="menu-summary-time" aria-live="polite">光線充足，適合辨識障礙與練習起降。</div>
+        </div>
+
+        <div class="menu-setting-row">
+          <div class="setting-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-camera"></use></svg> 攝影機視角 (C)</div>
+          <div class="option-pills" id="opt-camera">
+            <button type="button" class="opt-pill active" data-val="chase" aria-describedby="menu-summary-camera" data-description="鏡頭從機身後方跟隨，可同時看到機身與周圍環境。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-chase"></use></svg> 追蹤視角</button>
+            <button type="button" class="opt-pill" data-val="fpv" aria-describedby="menu-summary-camera" data-description="透過機載前向鏡頭飛行，畫面隨機身姿態變化。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-fpv"></use></svg> 第一人稱視角</button>
+            <button type="button" class="opt-pill" data-val="down" aria-describedby="menu-summary-camera" data-description="鏡頭垂直朝向地面，便於觀察正下方。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-down"></use></svg> 垂直下視</button>
+          </div>
+          <div class="weather-impact-summary" id="menu-summary-camera" aria-live="polite">鏡頭從機身後方跟隨，可同時看到機身與周圍環境。</div>
+        </div>
+
+        <div class="menu-setting-row">
+          <div class="setting-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-rain"></use></svg> 天候條件 (Y)</div>
+          <div class="option-pills" id="opt-weather">
+            <div class="opt-pill active" data-val="clear"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 晴朗無風</div>
+            <div class="opt-pill" data-val="cloudy"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-cloud"></use></svg> 陰天微風</div>
+            <div class="opt-pill" data-val="drizzle"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-rain"></use></svg> 綿綿細雨</div>
+            <div class="opt-pill" data-val="heavy_rain"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-rain"></use></svg> 持續豪雨</div>
+            <div class="opt-pill" data-val="fog"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-fog"></use></svg> 低能見度</div>
+            <div class="opt-pill" data-val="typhoon"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-wind"></use></svg> 颱風驟雨</div>
+          </div>
+          <div class="weather-impact-summary" id="weather-impact-badge">
+            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-wind"></use></svg> 風速: <b>0.0 m/s (陣風 0.0)</b></span>
+            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-rain"></use></svg> 下壓氣流: <b>無</b></span>
+            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-battery"></use></svg> 耗電負載: <b>1.00x</b></span>
+            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-check"></use></svg> 操控評估: <b>平穩良好</b></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cta-row">
+        <button class="primary-btn" id="btn-start-flight"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-start"></use></svg> <span lang="zh-TW">起飛</span> <span lang="en">START FLIGHT</span></button>
+      </div>
+    </div>
+  </div>
+
+  <dialog class="modal-panel" id="tactical-briefing" aria-labelledby="tactical-briefing-title">
+    <header class="briefing-heading"><span>任務提示</span><h2 id="tactical-briefing-title">山谷前線行動</h2></header>
+    <p><strong>背景資訊</strong>山谷前線爆發交火。敵軍裝甲巡邏隊控制了谷底道路，山脊雷達站與坡腳彈藥庫仍在運作。你在山脊背坡的臨時放飛點待命。</p>
+    <p><strong>任務目標</strong>擊毀 <b class="briefing-target">2 輛敵軍巡邏坦克、1 座雷達站與 1 座彈藥庫</b>。</p>
+    <p><strong>結算條件</strong>全數擊毀或用完 6 枚任務配額後，<b class="briefing-return">返回臨時放飛點，在四角標記之間的淡色十字附近降落結算</b>。</p>
+    <p><strong>操作提示</strong><span class="briefing-control"><span>按</span><kbd>C</kbd><span>切換鏡頭，按</span><kbd>X</kbd><span>切換熱成像/夜視，按</span><kbd>Z</kbd><span>變焦，按</span><kbd>B</kbd><span>投彈。</span></span>每次最多掛載 2 枚，可返航補給，整趟任務最多投放 6 枚。</p>
+    <form method="dialog">
+      <button class="briefing-back" type="submit" autofocus>返回設定</button>
+      <button class="primary-btn" type="button" id="btn-briefing-launch">確認並起飛</button>
+    </form>
+  </dialog>
+
+  <!-- Scoreboard & Round Transition Modal -->
+  <div class="modal-backdrop hidden" id="scoreboard-modal">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div class="modal-eyebrow" id="score-eyebrow">FLIGHT TELEMETRY SUMMARY</div>
+        <div class="modal-title" id="score-title">飛行任務完成結算</div>
+        <div class="modal-subtitle" id="score-subtitle">已完成全航線穿梭並平穩降落</div>
+      </div>
+
+      <div class="scoreboard-columns" id="score-cards-container"></div>
+
+      <div class="cta-row" id="score-cta-row">
+        <button class="primary-btn" id="btn-score-next">再飛一趟</button>
+        <button class="secondary-btn" id="btn-score-menu">返回主選單</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=3.63"></script>
+</body>
+</html>
