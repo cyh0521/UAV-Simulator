@@ -7811,7 +7811,7 @@ async function startRunSequence(playerNum = 1) {
     single_race: '單人競速挑戰',
     versus_race: '雙人競速',
     free_flight: '城市自由空拍',
-    tactical_strike: '坦克戰術打擊'
+    tactical_strike: '戰場投彈'
   };
 
   const isTacticalMode = state.gameMode === 'tactical_strike';
@@ -8180,6 +8180,21 @@ function bindUIEvents() {
       document.querySelectorAll('.mode-select-card').forEach((c) => c.classList.remove('selected'));
       card.classList.add('selected');
       state.gameMode = card.dataset.mode;
+      document.getElementById('menu-summary-mode').textContent = card.dataset.description;
+      document.getElementById('exercise-selector').classList.toggle('hidden', card.dataset.mode !== 'tactical_strike');
+      document.querySelector('[data-mode="tactical_strike"]').setAttribute('aria-expanded', String(card.dataset.mode === 'tactical_strike'));
+    });
+  });
+
+  document.querySelectorAll('.exercise-option').forEach((option) => {
+    option.addEventListener('click', () => {
+      document.querySelectorAll('.exercise-option').forEach((item) => {
+        item.classList.remove('selected');
+        item.setAttribute('aria-pressed', 'false');
+      });
+      option.classList.add('selected');
+      option.setAttribute('aria-pressed', 'true');
+      state.gameMode = option.dataset.exercise;
     });
   });
 

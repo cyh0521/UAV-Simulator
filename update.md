@@ -66,6 +66,7 @@ UAV Simulator/
 ├── style.css                # 航電儀表深色主題、訓練導引卡、按鍵呼吸高亮動畫、考照證書版面
 ├── app.js                   # 核心邏輯（單一原生 JavaScript 腳本）
 ├── update.md                # 本技術交接與架構規格手冊
+├── 0.1                      # 空檔案（0 位元組，未見程式引用）
 │
 ├── vendor/
 │   ├── three.min.js         # Three.js 核心函式庫 (r128)
@@ -76,8 +77,16 @@ UAV Simulator/
 │   ├── drone.glb            # 備用無人機外觀模型
 │   └── drone_data.js        # 內嵌備用數據
 │
-└── scratch/                 # AI 開發與 CDP 自動化驗證腳本目錄 (測試用)
+└── scratch/                 # 目前為空；歷史驗證腳本未保留於此目錄
 ```
+
+### 檔案清理盤點（2026-11-11）
+
+- `0.1` 為 0 位元組空檔，未見程式引用，可刪除。
+- `scratch/` 目前為空，可刪除空目錄；本文歷史紀錄提到的驗證腳本目前不在專案中。
+- `vendor/GLTFLoader.js`、`models/drone.glb`、`models/drone_data.js` 未由 `index.html` 或 `app.js` 載入；它們屬備用資產。若不再需要備用模型，可一併移除（合計約 438 KB）。
+- `vendor/three.min.js`、`vendor/gsap.min.js`、`style.css`、`app.js` 由入口載入；`app.js` 實際使用 GSAP。這些檔案應保留。
+- 本次僅盤點並更新文件，尚未刪除檔案或實測瀏覽器載入流程。
 
 ### `app.js` 模組導航
 

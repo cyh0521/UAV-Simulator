@@ -9,7 +9,7 @@
   <script src="vendor/three.min.js"></script>
   <script src="vendor/gsap.min.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=3.14" />
+  <link rel="stylesheet" href="style.css?v=3.18" />
 </head>
 <body>
   <!-- 3D WebGL Viewport -->
@@ -464,28 +464,28 @@
 
       <!-- 3 Game Mode Cards -->
       <div class="mode-cards-grid">
-        <div class="mode-select-card selected" data-mode="training">
+        <div class="mode-select-card selected" data-mode="training" data-description="循序漸進的操作教學！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。" aria-describedby="menu-summary-mode">
           <span class="mode-card-tag">MODE 01 // 新手必學</span>
           <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-training"></use></svg> 新手飛行訓練</div>
-          <div class="mode-card-desc">
-            循序漸進的操作教學！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。
-          </div>
         </div>
 
-        <div class="mode-select-card" data-mode="versus_race">
+        <div class="mode-select-card" data-mode="versus_race" data-description="Player 1 與 Player 2 輪流挑戰城市賽道！P2 飛行時將同場出現 P1 的「全息影子無人機」同屏較勁。" aria-describedby="menu-summary-mode">
           <span class="mode-card-tag">MODE 02 // 雙人對決</span>
           <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-race"></use></svg> 雙人競速</div>
-          <div class="mode-card-desc">
-            Player 1 與 Player 2 輪流挑戰城市賽道！P2 飛行時將同場出現 P1 的「全息影子無人機」同屏較勁。
-          </div>
         </div>
 
-        <div class="mode-select-card" data-mode="tactical_strike">
-          <span class="mode-card-tag" style="background: rgba(239, 68, 68, 0.22); border-color: #ef4444; color: #f87171;">MODE 03 // 實戰打擊</span>
-          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-mission"></use></svg> 戰場投彈</div>
-          <div class="mode-card-desc">
-            山谷前線任務。進入戰場後可查看任務簡報。
-          </div>
+        <div class="mode-select-card" data-mode="tactical_strike" data-description="選擇演練項目，挑戰不同的野外飛行任務。" aria-describedby="menu-summary-mode" aria-controls="exercise-selector" aria-expanded="false">
+          <span class="mode-card-tag" style="background: rgba(239, 68, 68, 0.22); border-color: #ef4444; color: #f87171;">MODE 03 // 實戰演練</span>
+          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-mission"></use></svg> 實戰演練</div>
+        </div>
+      </div>
+      <div class="mode-description-row">
+        <div class="mode-description" id="menu-summary-mode" aria-live="polite">循序漸進的操作教學！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。</div>
+        <div class="exercise-selector hidden" id="exercise-selector" aria-label="實戰演練項目">
+          <div class="exercise-selector-heading">選擇演練項目</div>
+          <button type="button" class="exercise-option selected" data-exercise="tactical_strike" aria-pressed="true">
+            <span class="exercise-option-name">01　戰場投彈</span>
+          </button>
         </div>
       </div>
 
@@ -566,6 +566,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.63"></script>
+  <script src="app.js?v=3.66"></script>
 </body>
 </html>
