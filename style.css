@@ -61,11 +61,11 @@ html, body {
 
 /* Military FLIR White-Hot & NVG Phosphor Sensor Filters */
 #canvas-container.sensor-flir_white {
-  filter: grayscale(100%) contrast(145%);
+  filter: grayscale(100%) contrast(185%) brightness(88%);
 }
 
 #canvas-container.sensor-nvg {
-  filter: grayscale(100%) sepia(100%) hue-rotate(75deg) saturate(285%) contrast(115%);
+  filter: grayscale(100%) sepia(100%) hue-rotate(75deg) saturate(290%) contrast(122%) brightness(100%) blur(0.65px);
 }
 
 #vtx-overlay-canvas {
@@ -86,30 +86,26 @@ html, body {
   z-index: 3;
 }
 
-/* FPV Camera Vignette & Scanline Overlay */
+/* FPV Camera Vignette Overlay */
 #fpv-overlay {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 2;
-  background:
-    radial-gradient(circle at center, transparent 58%, rgba(4, 9, 20, 0.55) 100%),
-    repeating-linear-gradient(
-      0deg,
-      rgba(0, 240, 255, 0.015) 0px,
-      rgba(0, 240, 255, 0.015) 1px,
-      transparent 1px,
-      transparent 3px
-    );
+  background: radial-gradient(circle at center, transparent 58%, rgba(4, 9, 20, 0.45) 100%);
   transition: opacity 0.35s ease;
 }
 
 #fpv-overlay.chase-mode {
-  opacity: 0.35;
+  opacity: 0;
+}
+
+#fpv-overlay.fpv-mode {
+  opacity: 0.38;
 }
 
 #fpv-overlay.down-mode {
-  opacity: 0.55;
+  opacity: 0.52;
 }
 
 /* Damage / Penalty Flash Overlay */
@@ -1846,6 +1842,10 @@ body:has(#tactical-briefing[open]) :is(#hud-layer, #center-announcement) {
 #hud-telemetry-card.dimmed:hover {
   opacity: 0.95;
   filter: none;
+}
+
+#world-loading-title {
+  display: none !important;
 }
 
 #world-loading {

@@ -81,7 +81,12 @@ const drone = {
   yaw: 0,
   yawRate: 0,
   pitch: 0,
+  pitchRate: 0,
   roll: 0,
+  rollRate: 0,
+  groundEffectFactor: 1.0,
+  vrsSeverity: 0,
+  massRatio: 1.0,
   radius: 1.15,
   collisionCooldown: 0,
   rotorAngle: 0
@@ -94,6 +99,8 @@ const PHYSICS = {
     maxHorizontalAccel: 34.0,
     horizontalDrag: 2.1,
     maxClimbSpeed: 16.0,
+    maxDescentSpeed: 10.5,
+    hoverDescentLimit: 7.5,
     verticalAccel: 28.0,
     verticalDamping: 6.5,
     yawMaxRate: 2.4,
@@ -106,6 +113,8 @@ const PHYSICS = {
     maxHorizontalAccel: 54.0,
     horizontalDrag: 1.35,
     maxClimbSpeed: 24.0,
+    maxDescentSpeed: 16.5,
+    hoverDescentLimit: 14.5,
     verticalAccel: 38.0,
     verticalDamping: 4.2,
     yawMaxRate: 3.2,
@@ -306,12 +315,15 @@ class DroneAudioEngine {
     if (this.ctx.state === 'suspended' && state.audioEnabled) {
       this.ctx.resume().catch(() => {});
     }
-    const load = Math.min(1.5, speed / 24 + Math.abs(throttleInput) * 0.35 + (boost ? 0.35 : 0));
-    const baseFreq = 86 + load * 74;
+    const vrs = drone.vrsSeverity || 0;
+    const tSec = performance.now() * 0.001;
+    const vrsFlutter = vrs > 0.12 ? (Math.sin(tSec * 28.0) * 14 + Math.cos(tSec * 43.0) * 9) * vrs : 0;
+    const load = Math.min(1.6, speed / 24 + Math.abs(throttleInput) * 0.35 + (boost ? 0.35 : 0) + vrs * 0.45);
+    const baseFreq = Math.max(52, 86 + load * 74 + vrsFlutter);
     const now = this.ctx.currentTime;
-    this.osc1.frequency.setTargetAtTime(baseFreq, now, 0.06);
-    this.osc2.frequency.setTargetAtTime(baseFreq * 2.02, now, 0.06);
-    this.filter.frequency.setTargetAtTime(290 + load * 310, now, 0.08);
+    this.osc1.frequency.setTargetAtTime(baseFreq, now, 0.04);
+    this.osc2.frequency.setTargetAtTime(baseFreq * (2.02 - vrs * 0.18), now, 0.04);
+    this.filter.frequency.setTargetAtTime(290 + load * 310 + Math.abs(vrsFlutter) * 8, now, 0.05);
   }
 
   setMuted(muted) {
@@ -343,79 +355,138 @@ class DroneAudioEngine {
     if (!state.audioEnabled || !this.ctx) return;
     try {
       const now = this.ctx.currentTime;
+      // 1. Mechanical servo release latch click & unhook
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(480, now);
-      osc.frequency.exponentialRampToValueAtTime(110, now + 0.08);
-      gain.gain.setValueAtTime(0.45, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc.frequency.setValueAtTime(680, now);
+      osc.frequency.exponentialRampToValueAtTime(140, now + 0.035);
+      gain.gain.setValueAtTime(0.38, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
       osc.connect(gain);
       gain.connect(this.ctx.destination);
       osc.start(now);
-      osc.stop(now + 0.09);
+      osc.stop(now + 0.04);
+
+      // Low mechanical latch pop
+      const pop = this.ctx.createOscillator();
+      const popGain = this.ctx.createGain();
+      pop.type = 'sine';
+      pop.frequency.setValueAtTime(130, now);
+      pop.frequency.exponentialRampToValueAtTime(42, now + 0.04);
+      popGain.gain.setValueAtTime(0.28, now);
+      popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      pop.connect(popGain);
+      popGain.connect(this.ctx.destination);
+      pop.start(now);
+      pop.stop(now + 0.045);
+
+      // 2. Military Avionics HUD Chirp ("ORD RELEASED" Telemetry confirmation beep)
+      const chirp = this.ctx.createOscillator();
+      const chirpGain = this.ctx.createGain();
+      chirp.type = 'sine';
+      chirp.frequency.setValueAtTime(1920, now + 0.015);
+      chirp.frequency.exponentialRampToValueAtTime(2450, now + 0.065);
+      chirpGain.gain.setValueAtTime(0.18, now + 0.015);
+      chirpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+      chirp.connect(chirpGain);
+      chirpGain.connect(this.ctx.destination);
+      chirp.start(now + 0.015);
+      chirp.stop(now + 0.075);
     } catch (e) {}
   }
 
   playBombWhistle() {
-    if (!state.audioEnabled || !this.ctx) return;
-    try {
-      const now = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(1150, now);
-      osc.frequency.exponentialRampToValueAtTime(260, now + 1.3);
-      gain.gain.setValueAtTime(0.04, now);
-      gain.gain.linearRampToValueAtTime(0.32, now + 0.95);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 1.35);
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start(now);
-      osc.stop(now + 1.4);
-    } catch (e) {}
+    // Deprecated: Cartoon bomb whistle removed for authentic military UAV silence during fall
   }
 
   playExplosion(intensity = 1.0) {
     if (!state.audioEnabled || !this.ctx) return;
     try {
       const now = this.ctx.currentTime;
-      const bufferSize = Math.floor(this.ctx.sampleRate * 1.5);
-      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
+      const isNadirView = state.cameraMode === 'down';
+
+      if (isNadirView) {
+        // High-altitude Nadir View (Operator Perspective):
+        // Air drastically attenuates high-frequency shrapnel/crackle over distance.
+        // What reaches the high-altitude optical sensor is a heavy, muffled sub-bass shockwave rumble.
+        const bufferSize = Math.floor(this.ctx.sampleRate * 1.0);
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = Math.random() * 2 - 1;
+        }
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        // Deep lowpass: only low rumble passes through (< 115Hz down to 26Hz)
+        filter.frequency.setValueAtTime(115 * Math.min(1.2, intensity), now);
+        filter.frequency.exponentialRampToValueAtTime(26, now + 0.85);
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.68 * intensity, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.95);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        noise.start(now);
+        noise.stop(now + 1.0);
+
+        // Heavy sub-bass shockwave displacement
+        const sub = this.ctx.createOscillator();
+        const subGain = this.ctx.createGain();
+        sub.type = 'sine';
+        sub.frequency.setValueAtTime(62, now);
+        sub.frequency.exponentialRampToValueAtTime(22, now + 0.55);
+        subGain.gain.setValueAtTime(0.88 * intensity, now);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+        sub.connect(subGain);
+        subGain.connect(this.ctx.destination);
+        sub.start(now);
+        sub.stop(now + 0.65);
+      } else {
+        // Chase Camera (External Battlefield Observer):
+        // Full-spectrum explosion with noise, shrapnel blast & sub-bass thump
+        const bufferSize = Math.floor(this.ctx.sampleRate * 1.5);
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = Math.random() * 2 - 1;
+        }
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(420 * intensity, now);
+        filter.frequency.exponentialRampToValueAtTime(40, now + 1.3);
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.9 * intensity, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.45);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        noise.start(now);
+        noise.stop(now + 1.5);
+
+        // Sub-bass heavy thump
+        const sub = this.ctx.createOscillator();
+        const subGain = this.ctx.createGain();
+        sub.type = 'sine';
+        sub.frequency.setValueAtTime(75, now);
+        sub.frequency.exponentialRampToValueAtTime(28, now + 0.65);
+        subGain.gain.setValueAtTime(0.95 * intensity, now);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+        sub.connect(subGain);
+        subGain.connect(this.ctx.destination);
+        sub.start(now);
+        sub.stop(now + 0.75);
       }
-      const noise = this.ctx.createBufferSource();
-      noise.buffer = buffer;
-
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(420 * intensity, now);
-      filter.frequency.exponentialRampToValueAtTime(40, now + 1.3);
-
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.9 * intensity, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 1.45);
-
-      noise.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.ctx.destination);
-      noise.start(now);
-      noise.stop(now + 1.5);
-
-      // Sub-bass heavy thump
-      const sub = this.ctx.createOscillator();
-      const subGain = this.ctx.createGain();
-      sub.type = 'sine';
-      sub.frequency.setValueAtTime(75, now);
-      sub.frequency.exponentialRampToValueAtTime(28, now + 0.65);
-      subGain.gain.setValueAtTime(0.95 * intensity, now);
-      subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
-      sub.connect(subGain);
-      subGain.connect(this.ctx.destination);
-      sub.start(now);
-      sub.stop(now + 0.75);
     } catch (e) {}
   }
 
@@ -543,24 +614,105 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.95;
 container.appendChild(renderer.domElement);
 
-// Balanced Crisp Anime Lighting with Rich Shadows
+// High-Dynamic-Range Procedural IBL (Image-Based Lighting) via PMREMGenerator
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+pmremGenerator.compileCubemapShader();
+const envMapCache = new Map();
+
+function getProceduralEnvMap(cacheKey, topHex, midHex, botHex, groundHex, sunPos, sunHex, sunStrength) {
+  if (envMapCache.has(cacheKey)) return envMapCache.get(cacheKey);
+  const scale = 0.42;
+  const toCss = (hex, mult = scale) => {
+    const c = new THREE.Color(hex).multiplyScalar(mult);
+    const r = Math.min(255, Math.round(c.r * 255));
+    const g = Math.min(255, Math.round(c.g * 255));
+    const b = Math.min(255, Math.round(c.b * 255));
+    return `rgb(${r},${g},${b})`;
+  };
+  const cTop = toCss(topHex, scale);
+  const cMid = toCss(midHex, scale);
+  const cBot = toCss(botHex, scale * 1.05);
+  const cGnd = toCss(groundHex, scale * 0.75);
+  const cSun = toCss(sunHex, Math.min(1.0, scale * 1.45 * Math.max(0.2, sunStrength)));
+
+  const faces = [];
+  for (let i = 0; i < 6; i++) {
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 64;
+    const ctx = cv.getContext('2d');
+    if (i === 2) {
+      // +Y Zenith
+      const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 45);
+      g.addColorStop(0.0, cTop);
+      g.addColorStop(1.0, cMid);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 64, 64);
+    } else if (i === 3) {
+      // -Y Ground nadir
+      ctx.fillStyle = cGnd;
+      ctx.fillRect(0, 0, 64, 64);
+    } else {
+      // Horizon side faces (+X, -X, +Z, -Z)
+      const g = ctx.createLinearGradient(0, 0, 0, 64);
+      g.addColorStop(0.0, cTop);
+      g.addColorStop(0.42, cMid);
+      g.addColorStop(0.52, cBot);
+      g.addColorStop(0.62, cGnd);
+      g.addColorStop(1.0, cGnd);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 64, 64);
+      if (i === 0 || i === 4) {
+        // Subtle solar specular highlight on sunward cube faces
+        const sg = ctx.createRadialGradient(32, 22, 1, 32, 22, 24);
+        sg.addColorStop(0.0, cSun);
+        sg.addColorStop(1.0, 'rgba(0,0,0,0)');
+        ctx.fillStyle = sg;
+        ctx.fillRect(0, 0, 64, 64);
+      }
+    }
+    faces.push(cv);
+  }
+  const cubeTex = new THREE.CubeTexture(faces);
+  cubeTex.encoding = THREE.sRGBEncoding;
+  cubeTex.needsUpdate = true;
+  const rt = pmremGenerator.fromCubemap(cubeTex);
+  cubeTex.dispose();
+  envMapCache.set(cacheKey, rt.texture);
+  return rt.texture;
+}
+
+// Balanced Physically-Based Lighting with Texel-Snapped Drone-Following Shadows
 const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x1e3a1f, 0.55);
 scene.add(hemiLight);
 
 const dirLight = new THREE.DirectionalLight(0xfff7ed, 1.15);
-dirLight.position.set(130, 160, 90);
+const currentSunOffset = new THREE.Vector3(130, 160, 90);
+dirLight.position.copy(currentSunOffset);
 dirLight.castShadow = true;
-dirLight.shadow.mapSize.width = 2048;
-dirLight.shadow.mapSize.height = 2048;
+const shadowMapRes = Math.min(4096, renderer.capabilities.maxTextureSize || 2048);
+dirLight.shadow.mapSize.width = shadowMapRes;
+dirLight.shadow.mapSize.height = shadowMapRes;
 dirLight.shadow.camera.near = 15;
-dirLight.shadow.camera.far = 550;
-const dRange = 190;
+dirLight.shadow.camera.far = 520;
+const dRange = 135;
 dirLight.shadow.camera.left = -dRange;
 dirLight.shadow.camera.right = dRange;
 dirLight.shadow.camera.top = dRange;
 dirLight.shadow.camera.bottom = -dRange;
-dirLight.shadow.bias = -0.0004;
+dirLight.shadow.bias = -0.00025;
+dirLight.shadow.normalBias = 0.022;
 scene.add(dirLight);
+scene.add(dirLight.target);
+
+function updateShadowFrustum() {
+  // Snap shadow frustum center to world texel grid to prevent shadow edge shimmering
+  const texelWorldStep = (dRange * 2) / shadowMapRes * 4.0;
+  const snapX = Math.round(drone.pos.x / texelWorldStep) * texelWorldStep;
+  const snapZ = Math.round(drone.pos.z / texelWorldStep) * texelWorldStep;
+  dirLight.target.position.set(snapX, 0, snapZ);
+  dirLight.position.set(snapX + currentSunOffset.x, currentSunOffset.y, snapZ + currentSunOffset.z);
+}
 
 // ============================================================================
 // 6. CITY LAYOUT
@@ -964,6 +1116,7 @@ function* buildCity() {
   };
   const materials = Object.fromEntries(Object.entries(colors).map(([key, color]) =>
     [key, new THREE.MeshStandardMaterial({ color: new THREE.Color(color).convertSRGBToLinear(), roughness: 0.88 })]));
+  applyTreeWindShader(materials.leaves, true);
   function surfaceMaterial(asphalt) {
     const tile = document.createElement('canvas');
     tile.width = tile.height = 256;
@@ -3241,16 +3394,27 @@ function* buildTaiwanMarketStreet() {
 
 let skyDomeMesh = null;
 let toweringCumulusGroup = null;
+let wildernessLandMat = null;
+let wildernessRoadMat = null;
 
 function buildAnimeSky() {
-  const skyGeo = new THREE.SphereGeometry(1100, 32, 24);
+  const skyGeo = new THREE.SphereGeometry(1100, 48, 32);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: {
       topColor: { value: new THREE.Color(0x0284c7) },
       midColor: { value: new THREE.Color(0x7dd3fc) },
-      bottomColor: { value: new THREE.Color(0xe0f2fe) }
+      bottomColor: { value: new THREE.Color(0xe0f2fe) },
+      sunDir: { value: new THREE.Vector3(130, 160, 90).normalize() },
+      sunColor: { value: new THREE.Color(0xfff7ed) },
+      mieStrength: { value: 1.0 },
+      cirrusStrength: { value: 0.28 },
+      cloudCoverage: { value: 0.22 },
+      cloudType: { value: 0.0 },
+      cloudBrightColor: { value: new THREE.Color(0xffffff) },
+      cloudDarkColor: { value: new THREE.Color(0x94a3b8) },
+      cloudOffset: { value: new THREE.Vector2(0, 0) }
     },
     vertexShader: `
       varying vec3 vWorldPos;
@@ -3264,11 +3428,130 @@ function buildAnimeSky() {
       uniform vec3 topColor;
       uniform vec3 midColor;
       uniform vec3 bottomColor;
+      uniform vec3 sunDir;
+      uniform vec3 sunColor;
+      uniform float mieStrength;
+      uniform float cirrusStrength;
+      uniform float cloudCoverage;
+      uniform float cloudType;
+      uniform vec3 cloudBrightColor;
+      uniform vec3 cloudDarkColor;
+      uniform vec2 cloudOffset;
       varying vec3 vWorldPos;
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float noise2D(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+
+      float fbm4(vec2 p) {
+        float v = 0.0;
+        v += noise2D(p) * 0.50;
+        v += noise2D(p * 2.07 + vec2(3.1, 1.7)) * 0.25;
+        v += noise2D(p * 4.19 - vec2(2.4, 5.3)) * 0.15;
+        v += noise2D(p * 8.41 + vec2(6.2, 3.8)) * 0.10;
+        return v;
+      }
+
+      float billowFbm(vec2 p) {
+        float v = 0.0;
+        float n1 = 1.0 - abs(noise2D(p) * 2.0 - 1.0);
+        float n2 = 1.0 - abs(noise2D(p * 2.13 + vec2(4.2, 1.9)) * 2.0 - 1.0);
+        float n3 = noise2D(p * 4.35 - vec2(1.8, 3.4));
+        v = n1 * 0.54 + n2 * 0.30 + n3 * 0.16;
+        return v;
+      }
+
+      float sampleCloudField(vec2 uv, float cType) {
+        // cType = 0.0: puffy fair-weather Cumulus
+        // cType = 0.5: layered horizontal Stratus / Altostratus
+        // cType = 1.0: turbulent domain-warped Cumulonimbus / Typhoon bands
+        vec2 cumulusUv = uv * 1.35;
+        float cumulusVal = billowFbm(cumulusUv) * 0.62 + fbm4(cumulusUv * 0.85) * 0.38;
+
+        vec2 stratusUv = uv * vec2(0.95, 2.15);
+        float stratusVal = fbm4(stratusUv);
+
+        vec2 warp = vec2(
+          fbm4(uv * 1.15 + vec2(1.7, 9.2)),
+          fbm4(uv * 1.15 + vec2(8.3, 2.8))
+        ) - 0.5;
+        vec2 stormUv = uv * vec2(1.25, 1.75) + warp * 0.68;
+        float stormVal = fbm4(stormUv) * 0.65 + billowFbm(stormUv * 1.6) * 0.35;
+
+        float lowToMid = mix(cumulusVal, stratusVal, clamp(cType * 1.8, 0.0, 1.0));
+        return mix(lowToMid, stormVal, clamp((cType - 0.45) * 1.82, 0.0, 1.0));
+      }
+
       void main() {
-        float h = normalize(vWorldPos).y;
+        vec3 dir = normalize(vWorldPos);
+        float h = dir.y;
         vec3 col = mix(bottomColor, midColor, smoothstep(-0.06, 0.28, h));
         col = mix(col, topColor, smoothstep(0.28, 0.85, h));
+
+        // Physical Mie forward solar scattering & crisp solar disc (algebraic powers avoid pow(0, y) NaN)
+        float mu = clamp(dot(dir, sunDir), 0.0, 1.0);
+        float mu2 = mu * mu;
+        float mu4 = mu2 * mu2;
+        float mu8 = mu4 * mu4;
+        float mu16 = mu8 * mu8;
+        float mu64 = mu16 * mu16 * mu16 * mu16;
+        float horizonMask = smoothstep(-0.04, 0.06, h);
+        float mieHalo = mu8 * 0.26 + mu64 * 0.55;
+        float solarDisc = smoothstep(0.9991, 0.9997, mu) * 1.8;
+        col += sunColor * (mieHalo + solarDisc) * mieStrength * horizonMask;
+
+        // Layer 1: High-altitude ice-crystal cirrus cloud wisps
+        if (h > 0.05 && cirrusStrength > 0.01) {
+          vec2 cirrusUv = (dir.xz / (h + 0.18)) * vec2(2.6, 1.05) + cloudOffset * 0.25;
+          float cn = noise2D(cirrusUv) * 0.52 + noise2D(cirrusUv * 2.4 + 4.1) * 0.32 + noise2D(cirrusUv * 5.2 - 2.7) * 0.16;
+          float cirrusMask = smoothstep(0.55, 0.85, cn) * smoothstep(0.06, 0.24, h) * (1.0 - smoothstep(0.62, 0.96, h));
+          vec3 cirrusCol = mix(cloudBrightColor, sunColor, 0.30);
+          col = mix(col, cirrusCol, cirrusMask * cirrusStrength);
+        }
+
+        // Layer 2: Dynamic weather cloud deck (Cumulus / Stratocumulus / Stratus / Cumulonimbus / Typhoon)
+        if (h > -0.02 && cloudCoverage > 0.01) {
+          vec2 skyUv = (dir.xz / (max(h, 0.0) + 0.22)) * 1.15 + cloudOffset;
+          float n = sampleCloudField(skyUv, cloudType);
+
+          // Threshold & edge softness adapt to cloudCoverage and cloudType
+          float edgeSoftness = mix(0.14, 0.26, cloudType);
+          float threshold = mix(0.74, 0.20, cloudCoverage);
+          float cloudDensity = smoothstep(threshold, threshold + edgeSoftness, n);
+          float horizonFade = smoothstep(-0.02, 0.11, h);
+          float cloudAlpha = cloudDensity * horizonFade * clamp(cloudCoverage * 1.35, 0.0, 0.97);
+
+          if (cloudAlpha > 0.005) {
+            // Directional self-shadowing along solar azimuth + vertical cloud thickness
+            vec2 sunStep = normalize(sunDir.xz + vec2(0.0001, 0.0001)) * 0.13;
+            float nSun = sampleCloudField(skyUv + sunStep, cloudType);
+            float selfShadow = clamp((nSun - n) * 2.8 + (n - threshold) * mix(0.65, 1.45, cloudType), 0.0, 1.0);
+            float lightFactor = clamp(1.0 - selfShadow, 0.0, 1.0);
+
+            vec3 cCol = mix(cloudDarkColor, cloudBrightColor, lightFactor);
+            // Silver-lining forward scatter around cloud edges near the sun
+            float silverLining = (1.0 - cloudDensity * 0.7) * mu4 * mieStrength * 0.45;
+            cCol += sunColor * silverLining;
+
+            // Blend distant horizon clouds gently into horizon atmosphere
+            cCol = mix(bottomColor, cCol, smoothstep(0.0, 0.22, h));
+            col = mix(col, cCol, cloudAlpha);
+          }
+        }
+
         gl_FragColor = vec4(col, 1.0);
       }
     `
@@ -3276,7 +3559,6 @@ function buildAnimeSky() {
   skyDomeMesh = new THREE.Mesh(skyGeo, skyMat);
   scene.add(skyDomeMesh);
 
-  // Note: Towering cumulus cloud cluster removed per user request for clear, unobstructed sky
   toweringCumulusGroup = null;
 }
 
@@ -3388,46 +3670,27 @@ const WEATHER_PROFILES = {
 };
 
 let rainPointsMesh = null;
-const RAIN_BOX_W = 130;
-const RAIN_BOX_H = 75;
-const RAIN_BOX_D = 130;
-const MAX_RAIN_PARTICLES = 5500;
+let rainMistMesh = null;
+const RAIN_BOX_W = 68;
+const RAIN_BOX_H = 44;
+const RAIN_BOX_D = 68;
+const MAX_RAIN_PARTICLES = 5200;
+const MAX_RAIN_MIST = 64;
 
-let rainDropTexture = null;
+let rainMistTexture = null;
 
-function createRainDropTexture() {
+function createRainMistTexture() {
   const canvas = document.createElement('canvas');
-  canvas.width = 32;
+  canvas.width = 128;
   canvas.height = 128;
   const ctx = canvas.getContext('2d');
-
-  ctx.clearRect(0, 0, 32, 128);
-
-  // Soft vertical anti-aliased water streak gradient
-  const grad = ctx.createLinearGradient(16, 0, 16, 128);
-  grad.addColorStop(0.0, 'rgba(255, 255, 255, 0.0)');
-  grad.addColorStop(0.2, 'rgba(186, 230, 253, 0.25)');
-  grad.addColorStop(0.65, 'rgba(224, 242, 254, 0.85)');
-  grad.addColorStop(0.9, 'rgba(255, 255, 255, 0.95)');
-  grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
-
-  ctx.fillStyle = grad;
-
-  // Slender aerodynamic raindrop capsule (no square corners)
-  ctx.beginPath();
-  ctx.ellipse(16, 68, 4.5, 46, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Glowing droplet head
-  const headGrad = ctx.createRadialGradient(16, 102, 0, 16, 102, 7);
-  headGrad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
-  headGrad.addColorStop(0.5, 'rgba(224, 242, 254, 0.7)');
-  headGrad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
-  ctx.fillStyle = headGrad;
-  ctx.beginPath();
-  ctx.arc(16, 102, 7, 0, Math.PI * 2);
-  ctx.fill();
-
+  ctx.clearRect(0, 0, 128, 128);
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+  g.addColorStop(0.0, 'rgba(215, 228, 240, 0.32)');
+  g.addColorStop(0.5, 'rgba(195, 212, 228, 0.14)');
+  g.addColorStop(1.0, 'rgba(195, 212, 228, 0.0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(canvas);
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
@@ -3435,38 +3698,103 @@ function createRainDropTexture() {
 }
 
 function buildRainSystem() {
-  const geo = new THREE.BufferGeometry();
-  const positions = new Float32Array(MAX_RAIN_PARTICLES * 3);
+  // Fine atmospheric rain streaks with per-vertex alpha taper & camera-distance fade
+  const lineGeo = new THREE.BufferGeometry();
+  const linePositions = new Float32Array(MAX_RAIN_PARTICLES * 6);
+  const lineAlphas = new Float32Array(MAX_RAIN_PARTICLES * 2);
+  const headPositions = new Float32Array(MAX_RAIN_PARTICLES * 3);
   const velocities = new Float32Array(MAX_RAIN_PARTICLES);
+  const phaseJitter = new Float32Array(MAX_RAIN_PARTICLES);
 
   for (let i = 0; i < MAX_RAIN_PARTICLES; i++) {
-    positions[i * 3 + 0] = (Math.random() - 0.5) * RAIN_BOX_W;
-    positions[i * 3 + 1] = Math.random() * RAIN_BOX_H;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * RAIN_BOX_D;
-    velocities[i] = 20 + Math.random() * 15;
+    const hx = (Math.random() - 0.5) * RAIN_BOX_W;
+    const hy = Math.random() * RAIN_BOX_H;
+    const hz = (Math.random() - 0.5) * RAIN_BOX_D;
+    headPositions[i * 3 + 0] = hx;
+    headPositions[i * 3 + 1] = hy;
+    headPositions[i * 3 + 2] = hz;
+    velocities[i] = 22 + Math.random() * 10;
+    phaseJitter[i] = Math.random() * Math.PI * 2;
+
+    const vIdx = i * 6;
+    linePositions[vIdx + 0] = hx;
+    linePositions[vIdx + 1] = hy;
+    linePositions[vIdx + 2] = hz;
+    linePositions[vIdx + 3] = hx;
+    linePositions[vIdx + 4] = hy + 0.8;
+    linePositions[vIdx + 5] = hz;
+
+    // Leading droplet tip has soft variation; trailing tail fades to 0.0 alpha
+    lineAlphas[i * 2 + 0] = 0.55 + Math.random() * 0.45;
+    lineAlphas[i * 2 + 1] = 0.0;
   }
 
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+  lineGeo.setAttribute('aAlpha', new THREE.BufferAttribute(lineAlphas, 1));
 
-  if (!rainDropTexture) {
-    rainDropTexture = createRainDropTexture();
-  }
-
-  const mat = new THREE.PointsMaterial({
-    color: 0xdbeafe,
-    size: 0.42,
-    map: rainDropTexture,
+  const lineMat = new THREE.ShaderMaterial({
     transparent: true,
-    opacity: 0.85,
-    blending: THREE.NormalBlending,
     depthWrite: false,
-    alphaTest: 0.005
+    blending: THREE.NormalBlending,
+    uniforms: {
+      uColor: { value: new THREE.Color(0xdbeafe) },
+      uOpacity: { value: 0.24 },
+      uCamPos: { value: new THREE.Vector3() }
+    },
+    vertexShader: `
+      attribute float aAlpha;
+      uniform vec3 uCamPos;
+      varying float vAlpha;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        float dist = distance(wp.xyz, uCamPos);
+        // Smooth near-clip fade (1.8m..4.2m) and far atmospheric fade (12m..32m)
+        float distFade = smoothstep(1.8, 4.2, dist) * (1.0 - smoothstep(12.0, 32.0, dist));
+        vAlpha = aAlpha * distFade;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      varying float vAlpha;
+      void main() {
+        if (vAlpha <= 0.004) discard;
+        gl_FragColor = vec4(uColor, vAlpha * uOpacity);
+      }
+    `
   });
 
-  rainPointsMesh = new THREE.Points(geo, mat);
+  rainPointsMesh = new THREE.LineSegments(lineGeo, lineMat);
+  rainPointsMesh.frustumCulled = false;
+  rainPointsMesh.userData.headPositions = headPositions;
   rainPointsMesh.userData.velocities = velocities;
+  rainPointsMesh.userData.phaseJitter = phaseJitter;
   rainPointsMesh.visible = false;
   scene.add(rainPointsMesh);
+
+  // Subtle wind-driven rain mist curtains in heavy rain & typhoon
+  if (!rainMistTexture) rainMistTexture = createRainMistTexture();
+  const mistGeo = new THREE.BufferGeometry();
+  const mistPos = new Float32Array(MAX_RAIN_MIST * 3);
+  for (let i = 0; i < MAX_RAIN_MIST; i++) {
+    mistPos[i * 3 + 0] = (Math.random() - 0.5) * RAIN_BOX_W;
+    mistPos[i * 3 + 1] = Math.random() * 32 + 2;
+    mistPos[i * 3 + 2] = (Math.random() - 0.5) * RAIN_BOX_D;
+  }
+  mistGeo.setAttribute('position', new THREE.BufferAttribute(mistPos, 3));
+  const mistMat = new THREE.PointsMaterial({
+    color: 0xcbd5e1,
+    size: 14.0,
+    map: rainMistTexture,
+    transparent: true,
+    opacity: 0.07,
+    depthWrite: false
+  });
+  rainMistMesh = new THREE.Points(mistGeo, mistMat);
+  rainMistMesh.frustumCulled = false;
+  rainMistMesh.visible = false;
+  scene.add(rainMistMesh);
 }
 
 function updateRain(dt) {
@@ -3474,42 +3802,114 @@ function updateRain(dt) {
   const w = WEATHER_PROFILES[state.weather];
   if (!w || !w.rainCount) return;
 
-  const geo = rainPointsMesh.geometry;
-  const posArr = geo.attributes.position.array;
-  const vArr = rainPointsMesh.userData.velocities;
-  const count = Math.min(w.rainCount, MAX_RAIN_PARTICLES);
+  const tNow = performance.now() * 0.001;
+  const inWilderness = state.gameMode === 'tactical_strike';
+  const groundRef = inWilderness ? wildernessHeight(drone.pos.x, drone.pos.z) : 0;
+  const agl = Math.max(1.5, drone.pos.y - groundRef);
+  const shearMult = computeWindShearMultiplier(agl);
 
-  const speedBase = w.rainSpeed || 25;
-  const windSlantX = Math.cos(w.windAngle || 0) * (w.windSpeed || 0) * 0.45;
-  const windSlantZ = Math.sin(w.windAngle || 0) * (w.windSpeed || 0) * 0.45;
+  // Instantaneous wind + multi-frequency Dryden gust envelope + wind veering
+  const gustWave = Math.max(0, Math.sin(tNow * 1.15) * 0.45 + Math.cos(tNow * 2.35) * 0.35 + Math.sin(tNow * 3.95) * 0.20);
+  const gustSpread = Math.max(0, (w.gustSpeed || w.windSpeed || 0) - (w.windSpeed || 0));
+  const instWindSpeed = ((w.windSpeed || 0) + gustWave * gustSpread) * shearMult;
+  const turb = (w.turbulence || 0) * shearMult;
+  const wAng = (w.windAngle || 0.4) + (Math.sin(tNow * 0.85) * 0.14 + Math.cos(tNow * 1.95) * 0.08) * Math.min(1, turb * 1.2);
 
-  const cx = drone.pos.x;
-  const cy = drone.pos.y;
-  const cz = drone.pos.z;
+  // Horizontal raindrop advection velocity matched to natural wind slant (~12 deg in drizzle, ~22 deg in heavy rain, ~32-38 deg in typhoon)
+  const windAdvectMult = w.id === 'typhoon' ? 1.85 : (w.id === 'heavy_rain' ? 1.55 : 1.25);
+  const windVx = Math.cos(wAng) * instWindSpeed * windAdvectMult;
+  const windVz = Math.sin(wAng) * instWindSpeed * windAdvectMult;
+  const relVx = windVx - drone.vel.x * 0.22;
+  const relVz = windVz - drone.vel.z * 0.22;
+
+  rainPointsMesh.material.uniforms.uCamPos.value.copy(camera.position);
+
+  const camFwdX = -Math.sin(drone.yaw) * 8;
+  const camFwdZ = -Math.cos(drone.yaw) * 8;
+  const cx = camera.position.x + camFwdX;
+  const cy = camera.position.y;
+  const cz = camera.position.z + camFwdZ;
 
   const halfW = RAIN_BOX_W * 0.5;
   const halfD = RAIN_BOX_D * 0.5;
+  const count = Math.min(w.rainCount, MAX_RAIN_PARTICLES);
+  const speedBase = w.rainSpeed || 24;
+
+  // Natural motion-blur exposure length (~0.6m in drizzle, ~0.95m in heavy rain, ~1.35m in typhoon)
+  const isTyphoon = w.id === 'typhoon';
+  const isHeavy = w.id === 'heavy_rain';
+  const streakShutter = isTyphoon ? (0.032 + gustWave * 0.006) : (isHeavy ? (0.028 + gustWave * 0.004) : 0.024);
+
+  const lineGeo = rainPointsMesh.geometry;
+  const linePos = lineGeo.attributes.position.array;
+  const headPos = rainPointsMesh.userData.headPositions;
+  const vArr = rainPointsMesh.userData.velocities;
+  const jitterArr = rainPointsMesh.userData.phaseJitter;
 
   for (let i = 0; i < count; i++) {
-    const idx = i * 3;
-    posArr[idx + 1] -= (speedBase + (vArr[i] - 20)) * dt;
-    posArr[idx + 0] += windSlantX * dt;
-    posArr[idx + 2] += windSlantZ * dt;
+    const hIdx = i * 3;
+    const fallSpeed = speedBase + (vArr[i] - 22);
+    const jPhase = jitterArr[i];
+    const flutterX = Math.sin(tNow * 6.5 + jPhase) * turb * 1.1;
+    const flutterZ = Math.cos(tNow * 5.8 + jPhase) * turb * 1.1;
 
-    if (posArr[idx + 1] < cy - 25 || posArr[idx + 1] < 0.2) {
-      posArr[idx + 1] = cy + 45 + Math.random() * 10;
-      posArr[idx + 0] = cx + (Math.random() - 0.5) * RAIN_BOX_W;
-      posArr[idx + 2] = cz + (Math.random() - 0.5) * RAIN_BOX_D;
+    const vx = windVx + flutterX;
+    const vz = windVz + flutterZ;
+
+    let hx = headPos[hIdx + 0] + vx * dt;
+    let hy = headPos[hIdx + 1] - fallSpeed * dt;
+    let hz = headPos[hIdx + 2] + vz * dt;
+
+    if (hy < cy - 20 || hy < groundRef - 1.0) {
+      hy = cy + 22 + Math.random() * 8;
+      hx = cx + (Math.random() - 0.5) * RAIN_BOX_W;
+      hz = cz + (Math.random() - 0.5) * RAIN_BOX_D;
     }
-    if (Math.abs(posArr[idx + 0] - cx) > halfW) {
-      posArr[idx + 0] = cx - Math.sign(posArr[idx + 0] - cx) * halfW;
+    if (Math.abs(hx - cx) > halfW) {
+      hx = cx - Math.sign(hx - cx) * halfW;
     }
-    if (Math.abs(posArr[idx + 2] - cz) > halfD) {
-      posArr[idx + 2] = cz - Math.sign(posArr[idx + 2] - cz) * halfD;
+    if (Math.abs(hz - cz) > halfD) {
+      hz = cz - Math.sign(hz - cz) * halfD;
     }
+
+    headPos[hIdx + 0] = hx;
+    headPos[hIdx + 1] = hy;
+    headPos[hIdx + 2] = hz;
+
+    const svx = relVx + flutterX;
+    const svz = relVz + flutterZ;
+    const vIdx = i * 6;
+    linePos[vIdx + 0] = hx;
+    linePos[vIdx + 1] = hy;
+    linePos[vIdx + 2] = hz;
+    linePos[vIdx + 3] = hx - svx * streakShutter;
+    linePos[vIdx + 4] = hy + fallSpeed * streakShutter;
+    linePos[vIdx + 5] = hz - svz * streakShutter;
   }
+  lineGeo.attributes.position.needsUpdate = true;
 
-  geo.attributes.position.needsUpdate = true;
+  // Update Wind-Driven Rain Curtain Mist Sheets in Heavy Rain & Typhoon
+  if (rainMistMesh && rainMistMesh.visible) {
+    const mPos = rainMistMesh.geometry.attributes.position.array;
+    rainMistMesh.material.opacity = (isTyphoon ? 0.08 : 0.045) + gustWave * (isTyphoon ? 0.05 : 0.025);
+    for (let i = 0; i < MAX_RAIN_MIST; i++) {
+      const idx = i * 3;
+      mPos[idx + 0] += windVx * 1.05 * dt;
+      mPos[idx + 1] -= 2.6 * dt;
+      mPos[idx + 2] += windVz * 1.05 * dt;
+
+      if (mPos[idx + 1] < groundRef + 1.0) {
+        mPos[idx + 1] = cy + 20 + Math.random() * 12;
+      }
+      if (Math.abs(mPos[idx + 0] - cx) > halfW) {
+        mPos[idx + 0] = cx - Math.sign(mPos[idx + 0] - cx) * halfW;
+      }
+      if (Math.abs(mPos[idx + 2] - cz) > halfD) {
+        mPos[idx + 2] = cz - Math.sign(mPos[idx + 2] - cz) * halfD;
+      }
+    }
+    rainMistMesh.geometry.attributes.position.needsUpdate = true;
+  }
 }
 
 function applyWeather(weatherId) {
@@ -3536,12 +3936,22 @@ function applyWeather(weatherId) {
 
   if (rainPointsMesh) {
     if (w.rainCount > 0) {
+      const activeDrops = Math.min(w.rainCount, MAX_RAIN_PARTICLES);
       rainPointsMesh.visible = true;
-      rainPointsMesh.geometry.setDrawRange(0, Math.min(w.rainCount, MAX_RAIN_PARTICLES));
-      rainPointsMesh.material.size = weatherId === 'typhoon' ? 0.45 : weatherId === 'heavy_rain' ? 0.38 : 0.28;
-      rainPointsMesh.material.opacity = weatherId === 'typhoon' ? 0.85 : 0.65;
+      // Strictly match setDrawRange to activeDrops * 2 so zero un-updated vertices are ever drawn!
+      rainPointsMesh.geometry.setDrawRange(0, activeDrops * 2);
+      rainPointsMesh.material.uniforms.uOpacity.value = weatherId === 'typhoon' ? 0.34 : (weatherId === 'heavy_rain' ? 0.25 : 0.16);
+
+      if (rainMistMesh) {
+        rainMistMesh.visible = weatherId === 'typhoon' || weatherId === 'heavy_rain';
+        rainMistMesh.material.size = weatherId === 'typhoon' ? 16.0 : 12.0;
+        rainMistMesh.material.opacity = weatherId === 'typhoon' ? 0.09 : 0.05;
+      }
+      // Perform one immediate rain step so positions & slant are initialized before first render
+      updateRain(0.016);
     } else {
       rainPointsMesh.visible = false;
+      if (rainMistMesh) rainMistMesh.visible = false;
     }
   }
 
@@ -3578,35 +3988,35 @@ function applyTimeOfDay(mode) {
     },
     sunset: {
       label: '城市夕陽',
-      skyTop: 0x312e81,
-      skyMid: 0xe11d48,
-      skyBot: 0xfde047,
-      fogColor: 0xfb923c,
-      fogDensity: 0.002,
-      sunColor: 0xf97316,
-      sunIntensity: 1.5,
+      skyTop: 0x243b55,
+      skyMid: 0xc28d64,
+      skyBot: 0xf2c57c,
+      fogColor: 0xcfa57a,
+      fogDensity: 0.0018,
+      sunColor: 0xffb866,
+      sunIntensity: 1.32,
       sunPos: [-180, 75, 140],
-      hemiSky: 0xfdba74,
-      hemiGround: 0x4c1d95,
-      hemiIntensity: 0.85,
-      cloudColor: 0xfed7aa,
-      exposure: 1.02
+      hemiSky: 0xe8c396,
+      hemiGround: 0x383228,
+      hemiIntensity: 0.76,
+      cloudColor: 0xffe4b8,
+      exposure: 0.92
     },
     night: {
       label: '靜謐夏夜',
-      skyTop: 0x030712,
-      skyMid: 0x080e19,
-      skyBot: 0x101927,
-      fogColor: 0x090d16,
-      fogDensity: 0.0018,
+      skyTop: 0x02050e,
+      skyMid: 0x060c18,
+      skyBot: 0x0e1726,
+      fogColor: 0x070c14,
+      fogDensity: 0.0019,
       sunColor: 0x38bdf8,
-      sunIntensity: 0.11,
+      sunIntensity: 0.075,
       sunPos: [60, 160, 80],
-      hemiSky: 0x344158,
-      hemiGround: 0x172521,
-      hemiIntensity: 0.19,
-      cloudColor: 0x334155,
-      exposure: 0.62
+      hemiSky: 0x223042,
+      hemiGround: 0x111c18,
+      hemiIntensity: 0.14,
+      cloudColor: 0x243042,
+      exposure: 0.60
     }
   };
 
@@ -3620,16 +4030,122 @@ function applyTimeOfDay(mode) {
   const timeOption = document.querySelector('#opt-time .opt-pill.active');
   if (timeSummary && timeOption) timeSummary.textContent = timeOption.dataset.description;
 
+  const w = (typeof WEATHER_PROFILES !== 'undefined' && WEATHER_PROFILES[state.weather]) ? WEATHER_PROFILES[state.weather] : null;
+  const weatherId = w ? w.id : 'clear';
+  const weatherLightScale = w ? (w.lightScale || 1.0) : 1.0;
+  const isOvercastOrRain = weatherId !== 'clear';
+
+  // Weather-specific atmospheric sky tint, cloud coverage, cloud type & 3D cloud shading
+  const weatherAtmosphere = {
+    clear: {
+      skyBlend: 0.0,
+      daySky: [0x0284c7, 0x7dd3fc, 0xe0f2fe, 0x93c5fd],
+      sunsetSky: [0x243b55, 0xc28d64, 0xf2c57c, 0xcfa57a],
+      nightSky: [0x02050e, 0x060c18, 0x0e1726, 0x070c14],
+      cirrus: mode === 'night' ? 0.08 : (mode === 'sunset' ? 0.34 : 0.28),
+      coverage: 0.22,
+      cType: 0.0, // Puffy fair-weather Cumulus Humilis
+      mieMult: 1.0,
+      dayCloud: [0xffffff, 0x94a3b8],
+      sunsetCloud: [0xffe8c2, 0x7c6a60],
+      nightCloud: [0x334155, 0x111827]
+    },
+    cloudy: {
+      skyBlend: 0.38,
+      daySky: [0x3b6998, 0x89a7c2, 0xcbd8e6, 0xa8bacb],
+      sunsetSky: [0x2d3e52, 0x9e7b66, 0xd4b08c, 0xb09278],
+      nightSky: [0x050a14, 0x0c1524, 0x162233, 0x0c1420],
+      cirrus: mode === 'night' ? 0.06 : 0.20,
+      coverage: 0.64,
+      cType: 0.32, // Voluminous Stratocumulus & Towering Cumulus
+      mieMult: 0.55,
+      dayCloud: [0xf8fafc, 0x64748b],
+      sunsetCloud: [0xfcd9a8, 0x5c5356],
+      nightCloud: [0x2e3b4e, 0x0f1722]
+    },
+    drizzle: {
+      skyBlend: 0.74,
+      daySky: [0x516375, 0x7c8ea0, 0xadbcc9, 0x94a3b3],
+      sunsetSky: [0x36414f, 0x7d6b61, 0xa8927e, 0x8c796a],
+      nightSky: [0x070c14, 0x0f1722, 0x192330, 0x101722],
+      cirrus: 0.05,
+      coverage: 0.80,
+      cType: 0.65, // Flat layered Altostratus / Rain Stratus
+      mieMult: 0.22,
+      dayCloud: [0xdbe3ec, 0x526071],
+      sunsetCloud: [0xc9ae96, 0x474349],
+      nightCloud: [0x242f3d, 0x0c121b]
+    },
+    heavy_rain: {
+      skyBlend: 0.90,
+      daySky: [0x2c3847, 0x465466, 0x68778a, 0x556475],
+      sunsetSky: [0x222933, 0x4f4645, 0x70625b, 0x594e4a],
+      nightSky: [0x04070c, 0x080d14, 0x101722, 0x080d14],
+      cirrus: 0.0,
+      coverage: 0.92,
+      cType: 0.86, // Heavy dark-bellied Cumulonimbus / Nimbostratus
+      mieMult: 0.08,
+      dayCloud: [0x8b9bb0, 0x26313f],
+      sunsetCloud: [0x8c7669, 0x242329],
+      nightCloud: [0x18212b, 0x070b10]
+    },
+    fog: {
+      skyBlend: 0.95,
+      daySky: [0x8d9eab, 0xa6b5c2, 0xc4d0da, 0xb8c5d0],
+      sunsetSky: [0x6e737b, 0x9e8f84, 0xc2b29f, 0xb5a492],
+      nightSky: [0x0d131c, 0x141d29, 0x1c2736, 0x16202b],
+      cirrus: 0.0,
+      coverage: 0.95,
+      cType: 0.52, // Smooth enveloping Stratus Nebulosus fog blanket
+      mieMult: 0.20,
+      dayCloud: [0xd5dfe8, 0x93a3b1],
+      sunsetCloud: [0xc7b5a3, 0x7d726c],
+      nightCloud: [0x232e3c, 0x131b24]
+    },
+    typhoon: {
+      skyBlend: 0.96,
+      daySky: [0x1b2430, 0x2d3846, 0x455262, 0x364252],
+      sunsetSky: [0x161b24, 0x383236, 0x544947, 0x403838],
+      nightSky: [0x020408, 0x05080f, 0x0a1018, 0x05080f],
+      cirrus: 0.0,
+      coverage: 0.97,
+      cType: 1.0, // Swirling Typhoon Eyewall supercell storm bands
+      mieMult: 0.04,
+      dayCloud: [0x607082, 0x151e28],
+      sunsetCloud: [0x665652, 0x14151c],
+      nightCloud: [0x121922, 0x04070b]
+    }
+  };
+
+  const wa = weatherAtmosphere[weatherId] || weatherAtmosphere.clear;
+  const targetSky = mode === 'night' ? wa.nightSky : (mode === 'sunset' ? wa.sunsetSky : wa.daySky);
+  const targetCloud = mode === 'night' ? wa.nightCloud : (mode === 'sunset' ? wa.sunsetCloud : wa.dayCloud);
+
+  const blendHex = (hexA, hexB, t) => new THREE.Color(hexA).lerp(new THREE.Color(hexB), t).getHex();
+  const effSkyTop = blendHex(p.skyTop, targetSky[0], wa.skyBlend);
+  const effSkyMid = blendHex(p.skyMid, targetSky[1], wa.skyBlend);
+  const effSkyBot = blendHex(p.skyBot, targetSky[2], wa.skyBlend);
+  const effFogColor = blendHex(p.fogColor, targetSky[3], wa.skyBlend);
+  const effHemiSky = blendHex(p.hemiSky, targetSky[1], wa.skyBlend * 0.75);
+
   if (skyDomeMesh) {
-    skyDomeMesh.material.uniforms.topColor.value.setHex(p.skyTop);
-    skyDomeMesh.material.uniforms.midColor.value.setHex(p.skyMid);
-    skyDomeMesh.material.uniforms.bottomColor.value.setHex(p.skyBot);
+    const u = skyDomeMesh.material.uniforms;
+    u.topColor.value.setHex(effSkyTop);
+    u.midColor.value.setHex(effSkyMid);
+    u.bottomColor.value.setHex(effSkyBot);
+    u.sunDir.value.set(...p.sunPos).normalize();
+    u.sunColor.value.setHex(p.sunColor);
+    const baseMie = mode === 'night' ? 0.15 : (mode === 'sunset' ? 1.15 : 0.95);
+    u.mieStrength.value = baseMie * wa.mieMult;
+    u.cirrusStrength.value = wa.cirrus;
+    u.cloudCoverage.value = wa.coverage;
+    u.cloudType.value = wa.cType;
+    u.cloudBrightColor.value.setHex(targetCloud[0]);
+    u.cloudDarkColor.value.setHex(targetCloud[1]);
   }
 
-  const w = (typeof WEATHER_PROFILES !== 'undefined' && WEATHER_PROFILES[state.weather]) ? WEATHER_PROFILES[state.weather] : null;
-
-  scene.background.setHex(p.skyMid);
-  scene.fog.color.setHex(p.fogColor);
+  scene.background.setHex(effSkyMid);
+  scene.fog.color.setHex(effFogColor);
   const fogDensityBonus = w ? (w.fogDensityBonus || 0) : 0;
   if (scene.fog.isFogExp2) {
     scene.fog.density = p.fogDensity + fogDensityBonus;
@@ -3639,13 +4155,25 @@ function applyTimeOfDay(mode) {
   }
 
   dirLight.color.setHex(p.sunColor);
-  dirLight.intensity = p.sunIntensity * (w ? (w.lightScale || 1.0) : 1.0);
-  dirLight.position.set(...p.sunPos);
+  dirLight.intensity = p.sunIntensity * weatherLightScale;
+  currentSunOffset.set(...p.sunPos);
+  updateShadowFrustum();
 
-  hemiLight.color.setHex(p.hemiSky);
+  hemiLight.color.setHex(effHemiSky);
   hemiLight.groundColor.setHex(p.hemiGround);
-  hemiLight.intensity = p.hemiIntensity;
+  hemiLight.intensity = p.hemiIntensity * THREE.MathUtils.lerp(1.0, 0.78, wa.skyBlend);
 
+  // Wet-surface specular sheen on terrain & roads during rainy weather
+  const isWet = w && (w.id === 'drizzle' || w.id === 'heavy_rain' || w.id === 'typhoon');
+  const wetSeverity = !isWet ? 0 : (w.id === 'typhoon' ? 1.0 : (w.id === 'heavy_rain' ? 0.8 : 0.45));
+  if (wildernessLandMat) {
+    wildernessLandMat.roughness = THREE.MathUtils.lerp(0.95, 0.56, wetSeverity);
+    wildernessLandMat.metalness = THREE.MathUtils.lerp(0.02, 0.12, wetSeverity);
+  }
+  if (wildernessRoadMat) {
+    wildernessRoadMat.roughness = THREE.MathUtils.lerp(0.94, 0.38, wetSeverity);
+    wildernessRoadMat.metalness = THREE.MathUtils.lerp(0.03, 0.18, wetSeverity);
+  }
 
   if (toweringCumulusGroup) {
     toweringCumulusGroup.traverse((c) => {
@@ -3664,23 +4192,50 @@ function applyTimeOfDay(mode) {
   const thermal = state.sensorMode === 'flir_white';
   const nightVision = state.sensorMode === 'nvg' && mode === 'night';
   if (thermal) {
-    dirLight.intensity = .035;
-    hemiLight.intensity = .32;
-    hemiLight.color.setHex(0xb7c1c6);
-    hemiLight.groundColor.setHex(0x464b51);
-    scene.fog.color.setHex(0x17202a);
+    dirLight.intensity = 0.018;
+    hemiLight.intensity = 0.22;
+    hemiLight.color.setHex(0xa1abb0);
+    hemiLight.groundColor.setHex(0x282c30);
+    scene.fog.color.setHex(0x0c1218);
+    scene.environment = null;
     if (skyDomeMesh) {
       for (const key of ['topColor','midColor','bottomColor']) {
-        skyDomeMesh.material.uniforms[key].value.setHex(0x111922);
+        skyDomeMesh.material.uniforms[key].value.setHex(0x080f14);
       }
+      skyDomeMesh.material.uniforms.mieStrength.value = 0.0;
+      skyDomeMesh.material.uniforms.cirrusStrength.value = 0.0;
+      skyDomeMesh.material.uniforms.cloudCoverage.value = 0.0;
     }
-  } else if (nightVision) {
-    dirLight.intensity *= 2.7;
-    hemiLight.intensity *= 3.2;
-    hemiLight.color.setHex(0x7a8e83);
-    hemiLight.groundColor.setHex(0x38463a);
+  } else {
+    const iblSunStrength = mode === 'night' ? 0.08 : wa.mieMult;
+    scene.environment = getProceduralEnvMap(
+      `${mode}_${weatherId}_${nightVision ? 'nvg' : 'vis'}`,
+      nightVision ? 0x16261c : effSkyTop,
+      nightVision ? 0x263d2d : effSkyMid,
+      nightVision ? 0x34523d : effSkyBot,
+      nightVision ? 0x142017 : p.hemiGround,
+      p.sunPos,
+      nightVision ? 0x567360 : p.sunColor,
+      iblSunStrength
+    );
+    if (nightVision) {
+      // Balanced Gen 2/3 NVG photocathode amplification:
+      // Clear terrain, ridge lines and road contours for flight navigation,
+      // with authentic phosphor green tint and grain.
+      dirLight.intensity = Math.max(0.045, p.sunIntensity * 1.6);
+      hemiLight.intensity = Math.max(0.18, p.hemiIntensity * 1.7);
+      hemiLight.color.setHex(0x567360);
+      hemiLight.groundColor.setHex(0x1e2b20);
+    }
   }
-  renderer.toneMappingExposure = thermal ? .71 : nightVision ? 1.48 : p.exposure;
+  if (rainPointsMesh && rainPointsMesh.material && rainPointsMesh.material.uniforms) {
+    const rainTint = thermal ? 0x334155 : (nightVision ? 0x6ee7b7 : (mode === 'sunset' ? 0xfed7aa : (mode === 'night' ? 0x64748b : 0xdbeafe)));
+    rainPointsMesh.material.uniforms.uColor.value.setHex(rainTint);
+    if (rainMistMesh && rainMistMesh.material) {
+      rainMistMesh.material.color.setHex(thermal ? 0x1e293b : (nightVision ? 0x34d399 : (mode === 'sunset' ? 0xd6b094 : (mode === 'night' ? 0x334155 : 0xcbd5e1))));
+    }
+  }
+  renderer.toneMappingExposure = thermal ? 0.64 : (nightVision ? 0.94 : p.exposure);
 }
 
 function cycleTimeOfDay() {
@@ -4089,11 +4644,40 @@ function createTankMesh(colorHex, number) {
   const turret = new THREE.Mesh(turretGeo, armorMat);
   turretGroup.add(turret);
 
-  // Commander Cupola & Hatch
-  const cupolaGeo = new THREE.CylinderGeometry(0.35, 0.38, 0.25, 16);
-  const cupola = new THREE.Mesh(cupolaGeo, new THREE.MeshStandardMaterial({ color: 0x222c1e }));
-  cupola.position.set(0.45, 0.44, 0.4);
+  // Commander Cupola & Hinged Hatch
+  const cupolaMat = new THREE.MeshStandardMaterial({ color: 0x222c1e, roughness: 0.78, metalness: 0.25 });
+  const cupolaGeo = new THREE.CylinderGeometry(0.35, 0.38, 0.22, 16);
+  const cupola = new THREE.Mesh(cupolaGeo, cupolaMat);
+  cupola.position.set(0.45, 0.42, 0.4);
   turretGroup.add(cupola);
+
+  const cupolaInterior = new THREE.Mesh(
+    new THREE.CircleGeometry(0.28, 16).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0x070606, polygonOffset: true, polygonOffsetFactor: -3 })
+  );
+  cupolaInterior.position.set(0.45, 0.535, 0.4);
+  turretGroup.add(cupolaInterior);
+
+  const cupolaHatch = new THREE.Group();
+  cupolaHatch.position.set(0.76, 0.54, 0.4); // Hinge pivot at right edge of cupola
+  const hatchLid = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.33, 0.045, 16),
+    cupolaMat
+  );
+  hatchLid.position.set(-0.31, 0.02, 0);
+  cupolaHatch.add(hatchLid);
+  turretGroup.add(cupolaHatch);
+
+  // Turret Underside Ring & Cannon Breech Basket (visible when turret flips off hull)
+  const charMetalMat = new THREE.MeshStandardMaterial({ color: 0x1a1816, roughness: 0.92, metalness: 0.32, side: THREE.DoubleSide });
+  const turretUnderRing = new THREE.Group();
+  turretUnderRing.position.set(0, -0.02, 0.05);
+  const underCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 0.78, 0.24, 22), charMetalMat);
+  underCollar.position.y = -0.10;
+  const breechBlock = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.34, 0.92), charMetalMat);
+  breechBlock.position.set(0, -0.12, -0.18);
+  turretUnderRing.add(underCollar, breechBlock);
+  turretGroup.add(turretUnderRing);
 
   // Main gun silhouette
   const barrelGeo = new THREE.CylinderGeometry(0.09, 0.12, 4.2, 16);
@@ -4118,31 +4702,163 @@ function createTankMesh(colorHex, number) {
   const lensMaterial = new THREE.MeshStandardMaterial({color:0x344e50,roughness:.21,metalness:.45});
   const optic = new THREE.BoxGeometry(.19,.095,.033);
   const towEye = new THREE.TorusGeometry(.105,.026,7,14);
+
+  const skirts = [];
+  const stowageBoxes = [];
+  const deckTiles = [];
+  const engineVents = [];
+
   for (const side of [-1, 1]) {
     for (let i = 0; i < 6; i++) {
       const z = -2.27 + i * .91;
-      detail(root, skirt, armorMat, side * 1.84, .97, z);
-      detail(root, seam, trackMat, side * 1.938, 1.12, z).userData.visualOnly = true;
+      const skirtMesh = detail(root, skirt, armorMat, side * 1.84, .97, z);
+      const seamMesh = detail(root, seam, trackMat, side * 1.938, 1.12, z);
+      seamMesh.userData.visualOnly = true;
+      skirts.push({ mesh: skirtMesh, seamMesh, side, index: i, z, detached: false });
     }
     detail(turretGroup, cheek, armorMat, side * .83, .02, -1.03).rotation.y = side * .52;
-    detail(turretGroup, stowage, armorMat, side * .91, .12, .75);
+    const stowMesh = detail(turretGroup, stowage, armorMat, side * .91, .12, .75);
+    stowageBoxes.push(stowMesh);
     detail(turretGroup, optic, lensMaterial, side * .42,.38,-.86).userData.visualOnly = true;
     detail(root, towEye, trackMat,side * .84,.62,-2.82).userData.visualOnly = true;
     detail(root, towEye, trackMat,side * .84,.60,2.46).userData.visualOnly = true;
     for (let i = 0; i < 3; i++) {
-      detail(root, deckTile, armorMat, side * (.24 + i * .45), 1.04, -2.35).rotation.x = -.32;
+      const tileMesh = detail(root, deckTile, armorMat, side * (.24 + i * .45), 1.04, -2.35);
+      tileMesh.rotation.x = -.32;
+      deckTiles.push(tileMesh);
     }
   }
-  for (let i = 0; i < 7; i++) detail(root, vent, trackMat, 0, 1.24, 1.26 + i * .15);
-  detail(turretGroup, new THREE.BoxGeometry(1.58, .37, .64), armorMat, 0, -.04, 1.64);
+  for (let i = 0; i < 7; i++) {
+    engineVents.push(detail(root, vent, trackMat, 0, 1.24, 1.26 + i * .15));
+  }
+  const bustleBox = detail(turretGroup, new THREE.BoxGeometry(1.58, .37, .64), armorMat, 0, -.04, 1.64);
+  stowageBoxes.push(bustleBox);
   detail(turretGroup, new THREE.BoxGeometry(.32, .36, .34), trackMat, -.62, .46, -.52);
   detail(turretGroup, new THREE.BoxGeometry(.38, .25, .48), armorMat, -.49, .56, .61);
   detail(turretGroup, new THREE.CylinderGeometry(.045, .045, .79, 8).rotateX(Math.PI / 2),
     barrelMat, -.49, .64, .22);
-  detail(turretGroup, new THREE.CylinderGeometry(.14, .14, .58, 12).rotateX(Math.PI / 2),
+  const fumeExtractor = detail(turretGroup, new THREE.CylinderGeometry(.14, .14, .58, 12).rotateX(Math.PI / 2),
     barrelMat, 0, .05, -2.82);
-  detail(turretGroup, new THREE.CylinderGeometry(.018, .027, 1.12, 6),
-    barrelMat, .66, .81, 1.36).rotation.z = -.18;
+  const antennaMesh = detail(turretGroup, new THREE.CylinderGeometry(.018, .027, 1.12, 6),
+    barrelMat, .66, .81, 1.36);
+  antennaMesh.rotation.z = -.18;
+
+  // 4. Hull Turret-Ring Abyss & Internal Autoloader Wreckage (Exposed when Turret is Blown Off)
+  const turretRingWell = new THREE.Group();
+  turretRingWell.position.set(0, 1.224, -0.2);
+  turretRingWell.visible = false;
+  root.add(turretRingWell);
+
+  // Deep pitch-black void floor overriding hull top face via polygonOffset
+  const abyssVoidMat = new THREE.MeshBasicMaterial({
+    color: 0x040404,
+    polygonOffset: true,
+    polygonOffsetFactor: -5,
+    polygonOffsetUnits: -5
+  });
+  const abyssFloor = new THREE.Mesh(new THREE.CircleGeometry(0.98, 28).rotateX(-Math.PI / 2), abyssVoidMat);
+  abyssFloor.position.y = 0.002;
+  turretRingWell.add(abyssFloor);
+
+  // Outer soot scorch halo around the blown turret ring
+  const ringScorchMat = new THREE.MeshBasicMaterial({
+    color: 0x110f0d,
+    transparent: true,
+    opacity: 0.92,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3
+  });
+  const ringScorchHalo = new THREE.Mesh(new THREE.RingGeometry(0.92, 1.26, 28).rotateX(-Math.PI / 2), ringScorchMat);
+  ringScorchHalo.position.y = 0.001;
+  turretRingWell.add(ringScorchHalo);
+
+  // Glowing internal ammo carousel embers at the bottom of the breach
+  const emberGlowMat = new THREE.MeshBasicMaterial({
+    color: 0xe8590c,
+    transparent: true,
+    opacity: 0.9,
+    polygonOffset: true,
+    polygonOffsetFactor: -7,
+    polygonOffsetUnits: -7
+  });
+  const emberCoreMat = new THREE.MeshBasicMaterial({
+    color: 0xffb703,
+    transparent: true,
+    opacity: 0.95,
+    polygonOffset: true,
+    polygonOffsetFactor: -9,
+    polygonOffsetUnits: -9
+  });
+  const emberBed = new THREE.Mesh(new THREE.CircleGeometry(0.66, 22).rotateX(-Math.PI / 2), emberGlowMat);
+  emberBed.position.y = 0.005;
+  const emberHotCore = new THREE.Mesh(new THREE.CircleGeometry(0.34, 18).rotateX(-Math.PI / 2), emberCoreMat);
+  emberHotCore.position.y = 0.008;
+  turretRingWell.add(emberBed, emberHotCore);
+
+  // Charred cylindrical turret-ring pit wall & mangled autoloader carousel ring
+  const ringWall = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.97, 0.86, 0.20, 28, 1, true),
+    charMetalMat
+  );
+  ringWall.position.y = 0.08;
+  const ringCollar = new THREE.Mesh(
+    new THREE.TorusGeometry(0.97, 0.068, 9, 28).rotateX(Math.PI / 2),
+    charMetalMat
+  );
+  ringCollar.position.y = 0.045;
+  const mangledCarousel = new THREE.Mesh(
+    new THREE.TorusGeometry(0.58, 0.052, 8, 20).rotateX(Math.PI / 2 + 0.19),
+    charMetalMat
+  );
+  mangledCarousel.position.set(0.05, 0.09, -0.04);
+  turretRingWell.add(ringWall, ringCollar, mangledCarousel);
+
+  // 12 outward-peeled jagged steel armor petals & 8 twisted internal structural ribs
+  const petalGeo = new THREE.BoxGeometry(0.26, 0.032, 0.24);
+  const ribGeo = new THREE.BoxGeometry(0.06, 0.34, 0.07);
+  for (let i = 0; i < 12; i++) {
+    const ang = (i / 12) * Math.PI * 2 + (i % 3) * 0.08;
+    const r = 0.97 + (i % 2) * 0.04;
+    const petal = new THREE.Mesh(petalGeo, charMetalMat);
+    petal.position.set(Math.cos(ang) * r, 0.09 + (i % 3) * 0.025, Math.sin(ang) * r);
+    petal.rotation.y = -ang + Math.PI / 2;
+    petal.rotation.x = -0.45 - (i % 4) * 0.16; // Bent outward by internal blast
+    petal.rotation.z = ((i % 3) - 1) * 0.18;
+    turretRingWell.add(petal);
+  }
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2 + 0.22;
+    const r = 0.42 + (i % 3) * 0.16;
+    const rib = new THREE.Mesh(ribGeo, charMetalMat);
+    rib.position.set(Math.cos(ang) * r, 0.11, Math.sin(ang) * r);
+    rib.rotation.set((i % 2 ? 0.38 : -0.42), ang, (i % 3 - 1) * 0.35);
+    turretRingWell.add(rib);
+  }
+
+  // 5. Rear Engine Deck Penetration Breach (Exposed on Engine Kill or Cook-Off)
+  const engineBreachWell = new THREE.Group();
+  engineBreachWell.position.set(0, 1.226, 1.68);
+  engineBreachWell.visible = false;
+  root.add(engineBreachWell);
+
+  const engVoid = new THREE.Mesh(new THREE.CircleGeometry(0.58, 20).rotateX(-Math.PI / 2), abyssVoidMat);
+  engVoid.scale.set(1.22, 1, 0.86);
+  const engEmber = new THREE.Mesh(new THREE.CircleGeometry(0.36, 16).rotateX(-Math.PI / 2), emberGlowMat);
+  engEmber.scale.set(1.18, 1, 0.80);
+  engEmber.position.y = 0.004;
+  engineBreachWell.add(engVoid, engEmber);
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2 + 0.15;
+    const shard = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.03, 0.14), charMetalMat);
+    shard.position.set(Math.cos(ang) * 0.56, 0.08, Math.sin(ang) * 0.42);
+    shard.rotation.set(0.52 * Math.sin(ang), -ang, 0.48 * Math.cos(ang));
+    engineBreachWell.add(shard);
+  }
+
+  // 6. Dynamic Battle-Damage Group (Impact craters, broken track links, persistent wreck fire)
+  const damageGroup = new THREE.Group();
+  root.add(damageGroup);
 
   const markings = document.createElement('canvas');
   markings.width = 128;
@@ -4170,7 +4886,33 @@ function createTankMesh(colorHex, number) {
     if (part.isMesh) part.receiveShadow = true;
   });
 
-  return { root, turretGroup, hull, armorMat, rollWheels };
+  return {
+    root,
+    turretGroup,
+    hull,
+    glacis,
+    armorMat,
+    trackMat,
+    barrel,
+    fumeExtractor,
+    antennaMesh,
+    cupola,
+    cupolaHatch,
+    skirts,
+    stowageBoxes,
+    deckTiles,
+    engineVents,
+    wheelGroups,
+    turretRingWell,
+    emberBed,
+    emberHotCore,
+    engineBreachWell,
+    damageGroup,
+    camouflageCanvas: camouflage,
+    camouflageCtx: paint,
+    camouflageTexture,
+    rollWheels
+  };
 }
 
 function buildTankThermalSignature(tankRoot, plumeMap) {
@@ -4215,120 +4957,544 @@ function updateTankThermalSignature(tank, elapsed) {
   });
 }
 
+function buildRadarThermalSignature(radarRoot, plumeMap) {
+  const group = new THREE.Group();
+  group.visible = false;
+  group.userData.visualOnly = true;
+  radarRoot.add(group);
+
+  const warm = new THREE.MeshBasicMaterial({
+    color: 0xe2e8f0,
+    map: plumeMap,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false
+  });
+  const hot = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+
+  // Electronics cabinet heat glow on front & top
+  const cabinetHeat = vehiclePart(group, new THREE.PlaneGeometry(2.3, 1.1), warm, 0, 0.92, 1.52);
+  cabinetHeat.userData.visualOnly = true;
+
+  // Generator exhaust port on rear
+  const exhaust = vehiclePart(group, new THREE.BoxGeometry(0.24, 0.24, 0.08), hot, -0.95, 0.85, -0.78);
+  exhaust.userData.visualOnly = true;
+
+  // Transmitter horn heat
+  const feedHeat = vehiclePart(group, new THREE.BoxGeometry(0.18, 0.18, 0.25), hot, 0, 2.68, 0.55);
+  feedHeat.userData.visualOnly = true;
+
+  const puffs = Array.from({ length: 4 }, () => {
+    const mat = new THREE.SpriteMaterial({
+      map: plumeMap,
+      color: 0xfff8ee,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false
+    });
+    const sprite = new THREE.Sprite(mat);
+    group.add(sprite);
+    return sprite;
+  });
+
+  return { group, warm, exhaust, feedHeat, puffs };
+}
+
+function updateRadarThermalSignature(radar, elapsed) {
+  if (!radar || !radar.thermal) return;
+  const sig = radar.thermal;
+  const heat = radar.destroyed ? Math.exp(-Math.max(0, elapsed - (radar.stoppedAt ?? elapsed)) / 16) : 1;
+  sig.group.visible = state.sensorMode === 'flir_white' && heat > 0.04;
+  if (!sig.group.visible) return;
+  sig.warm.opacity = heat * 0.82;
+  sig.exhaust.visible = !radar.destroyed;
+  sig.feedHeat.visible = !radar.destroyed;
+  sig.puffs.forEach((puff, i) => {
+    const age = (elapsed * 0.75 + i / sig.puffs.length) % 1;
+    puff.position.set(-0.95, 0.95 + age * 1.8, -0.78 - age * 0.35);
+    puff.scale.setScalar(0.35 + age * 1.25);
+    puff.visible = !radar.destroyed;
+    puff.material.opacity = (1 - age) ** 2 * 0.35;
+  });
+}
+
+function createMilitaryCamoTexture(baseHex, patch1Hex, patch2Hex, stencilText = '') {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, 256, 256);
+
+  const blobs = [
+    [patch1Hex, 42, 58, 72, 34, 0.42],
+    [patch1Hex, 178, 142, 84, 38, -0.35],
+    [patch1Hex, 115, 224, 66, 29, 0.28],
+    [patch2Hex, 134, 44, 62, 26, -0.52],
+    [patch2Hex, 56, 168, 68, 30, 0.61],
+    [patch2Hex, 214, 210, 58, 25, -0.44]
+  ];
+  for (const [col, x, y, w, h, ang] of blobs) {
+    ctx.fillStyle = col;
+    for (const dx of [-256, 0, 256]) {
+      for (const dy of [-256, 0, 256]) {
+        ctx.save();
+        ctx.translate(x + dx, y + dy);
+        ctx.rotate(ang);
+        ctx.beginPath();
+        ctx.moveTo(-w, 0);
+        ctx.bezierCurveTo(-w, -h, -w * 0.2, -h * 1.1, w * 0.35, -h * 0.85);
+        ctx.bezierCurveTo(w * 1.05, -h * 0.5, w * 0.95, h * 0.6, w * 0.4, h * 0.9);
+        ctx.bezierCurveTo(-w * 0.25, h * 1.15, -w * 0.85, h * 0.7, -w, 0);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+  // Subtle panel seam lines & rivet weathering
+  ctx.strokeStyle = 'rgba(18, 22, 16, 0.36)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(6, 6, 244, 244);
+  ctx.beginPath();
+  ctx.moveTo(128, 0);
+  ctx.lineTo(128, 256);
+  ctx.stroke();
+
+  if (stencilText) {
+    ctx.fillStyle = '#e5c453';
+    ctx.font = 'bold 20px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(stencilText, 128, 42);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.encoding = THREE.sRGBEncoding;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return { canvas, ctx, tex };
+}
+
+function createHazardStripeMaterial() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#d99b16';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.fillStyle = '#1c1d1a';
+  for (let i = -128; i < 256; i += 32) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + 16, 0);
+    ctx.lineTo(i - 48, 128);
+    ctx.lineTo(i - 64, 128);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.encoding = THREE.sRGBEncoding;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.78, metalness: 0.18 });
+}
+
 function createRadarMesh() {
   const root = new THREE.Group();
-  const concrete = new THREE.MeshStandardMaterial({color:0x77786d,roughness:.94});
-  const cabinet = new THREE.MeshStandardMaterial({color:0x505b49,roughness:.82});
-  const steel = new THREE.MeshStandardMaterial({color:0x485149,metalness:.46,roughness:.65});
-  const reflector = new THREE.MeshStandardMaterial({
-    color:0x747b60,metalness:.38,roughness:.65,side:THREE.DoubleSide
+
+  // Authentic Military Materials: 3-Color NATO Woodland Camo, Gunmetal Truss, Composite Tan Radome & Open Mesh Grid
+  const camoData = createMilitaryCamoTexture('#3d4e36', '#65543e', '#222821', 'SAM-RADAR 36D6');
+  const cabinetMat = new THREE.MeshStandardMaterial({ map: camoData.tex, roughness: 0.80, metalness: 0.22 });
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0x7b7c72, roughness: 0.94 });
+  const darkConcreteMat = new THREE.MeshStandardMaterial({ color: 0x565850, roughness: 0.96 });
+  const gunmetalMat = new THREE.MeshStandardMaterial({ color: 0x333b35, metalness: 0.62, roughness: 0.48 });
+  const oliveSteelMat = new THREE.MeshStandardMaterial({ color: 0x4b5744, metalness: 0.48, roughness: 0.56 });
+  const radomeTanMat = new THREE.MeshStandardMaterial({ color: 0xc8b892, roughness: 0.58, metalness: 0.08 });
+  const hazardMat = createHazardStripeMaterial();
+
+  // See-through Perforated Metallic Parabolic Radar Grid Texture
+  const gridCanvas = document.createElement('canvas');
+  gridCanvas.width = gridCanvas.height = 256;
+  const gCtx = gridCanvas.getContext('2d');
+  gCtx.clearRect(0, 0, 256, 256);
+  gCtx.fillStyle = 'rgba(84, 94, 76, 0.22)';
+  gCtx.fillRect(0, 0, 256, 256);
+  gCtx.strokeStyle = '#8b967f';
+  gCtx.lineWidth = 3.2;
+  for (let y = 0; y <= 256; y += 16) {
+    gCtx.beginPath();
+    gCtx.moveTo(0, y);
+    gCtx.lineTo(256, y);
+    gCtx.stroke();
+  }
+  gCtx.strokeStyle = '#5c6653';
+  gCtx.lineWidth = 4.0;
+  for (let x = 0; x <= 256; x += 32) {
+    gCtx.beginPath();
+    gCtx.moveTo(x, 0);
+    gCtx.lineTo(x, 256);
+    gCtx.stroke();
+  }
+  // Outer structural frame border
+  gCtx.strokeStyle = '#363d34';
+  gCtx.lineWidth = 10;
+  gCtx.strokeRect(4, 4, 248, 248);
+  const gridTex = new THREE.CanvasTexture(gridCanvas);
+  gridTex.encoding = THREE.sRGBEncoding;
+  const reflectorMat = new THREE.MeshStandardMaterial({
+    map: gridTex,
+    color: 0x9aa68e,
+    metalness: 0.58,
+    roughness: 0.42,
+    alphaTest: 0.18,
+    transparent: true,
+    side: THREE.DoubleSide
   });
-  vehiclePart(root,new THREE.BoxGeometry(5.4,.25,5.2),concrete,0,.125,0,true);
-  vehiclePart(root,new THREE.BoxGeometry(2.5,1.3,2.2),cabinet,0,.90,.40,true);
-  vehiclePart(root,new THREE.BoxGeometry(.86,.87,.08),steel,.47,.89,-.74);
-  const louver = new THREE.BoxGeometry(.65,.035,.065);
-  for (let i = 0; i < 7; i++) vehiclePart(root,louver,steel,-.65,.61+i*.075,-.74);
-  const post = new THREE.BoxGeometry(.14,1.34,.14);
-  for (const x of [-.58,.58]) {
-    for (const z of [-.38,.38]) vehiclePart(root,post,steel,x,1.86,z,true);
-  }
-  const bracing = new THREE.BoxGeometry(.075,1.31,.075);
-  for (const z of [-.38,.38]) {
-    vehiclePart(root,bracing,steel,0,1.88,z).rotation.z = .74;
-    vehiclePart(root,bracing,steel,0,1.88,z).rotation.z = -.74;
-  }
-  vehiclePart(root,new THREE.CylinderGeometry(.53,.60,.22,16),steel,0,2.60,0);
 
-  const housing = new THREE.MeshStandardMaterial({ color: 0x363e35, roughness: .85 });
-  const indicator = new THREE.MeshStandardMaterial({ color: 0x76886d, emissive: 0x263327 });
-  vehiclePart(root, new THREE.BoxGeometry(.75, .95, .45), housing, 1.53, .72, .55, true);
-  for (const x of [.24, .45, .66]) {
-    vehiclePart(root, new THREE.BoxGeometry(.07, .07, .035), indicator, x, 1.10, -.80);
-  }
-  for (const x of [-2.15, 2.15]) {
-    vehiclePart(root, new THREE.BoxGeometry(.28, .13, 4.7), steel, x, .28, 0);
+  // 1. Octagonal Reinforced Concrete Radar Pad & Hazard Safety Curbing
+  vehiclePart(root, new THREE.BoxGeometry(6.2, 0.26, 6.0), concreteMat, 0, 0.13, 0, true);
+  vehiclePart(root, new THREE.CylinderGeometry(2.45, 2.65, 0.18, 8), darkConcreteMat, 0, 0.32, 0, true);
+  for (const side of [-1, 1]) {
+    vehiclePart(root, new THREE.BoxGeometry(0.24, 0.12, 5.8), hazardMat, side * 2.95, 0.28, 0);
+    vehiclePart(root, new THREE.BoxGeometry(5.6, 0.12, 0.24), hazardMat, 0, 0.28, side * 2.85);
   }
 
+  // 2. Mobile Tactical Radar Electronics Shelter Cabin & 4 Hydraulic Leveling Outrigger Jacks
+  vehiclePart(root, new THREE.BoxGeometry(3.1, 0.24, 2.5), gunmetalMat, 0, 0.52, 0.25, true); // Chassis frame
+  const mainCabin = vehiclePart(root, new THREE.BoxGeometry(2.85, 1.42, 2.35), cabinetMat, 0, 1.32, 0.25, true);
+
+  // 4 Heavy Hydraulic Leveling Outriggers planted on concrete pad
+  const outriggerBeam = new THREE.BoxGeometry(0.65, 0.14, 0.16);
+  const outriggerJack = new THREE.CylinderGeometry(0.08, 0.09, 0.62, 10);
+  const outriggerPad = new THREE.CylinderGeometry(0.24, 0.28, 0.06, 12);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const ox = sx * 1.72, oz = 0.25 + sz * 1.05;
+      const beam = vehiclePart(root, outriggerBeam, gunmetalMat, sx * 1.48, 0.54, oz);
+      beam.rotation.z = -sx * 0.18;
+      vehiclePart(root, outriggerJack, oliveSteelMat, ox, 0.34, oz);
+      vehiclePart(root, outriggerPad, hazardMat, ox, 0.27, oz);
+    }
+  }
+
+  // HVAC Heat-Exchanger Units, Louver Grilles, Generator Exhaust & Status Control Panel
+  vehiclePart(root, new THREE.BoxGeometry(0.92, 0.94, 0.48), oliveSteelMat, 1.65, 1.18, 0.35, true);
+  vehiclePart(root, new THREE.BoxGeometry(0.78, 0.82, 0.42), gunmetalMat, -1.62, 1.12, 0.45, true);
+  const louverGeo = new THREE.BoxGeometry(0.76, 0.038, 0.06);
+  for (let i = 0; i < 8; i++) {
+    vehiclePart(root, louverGeo, gunmetalMat, -0.68, 0.82 + i * 0.085, -0.94);
+  }
+  // Diesel generator vertical exhaust pipe & rain cap on rear left
+  vehiclePart(root, new THREE.CylinderGeometry(0.065, 0.065, 1.45, 10), gunmetalMat, -1.18, 1.65, -0.98);
+  const ledGreen = new THREE.MeshStandardMaterial({ color: 0x34d399, emissive: 0x10b981, emissiveIntensity: 0.9 });
+  const ledAmber = new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xd97706, emissiveIntensity: 0.9 });
+  vehiclePart(root, new THREE.BoxGeometry(0.08, 0.08, 0.04), ledGreen, 0.35, 1.52, -0.94);
+  vehiclePart(root, new THREE.BoxGeometry(0.08, 0.08, 0.04), ledGreen, 0.52, 1.52, -0.94);
+  vehiclePart(root, new THREE.BoxGeometry(0.08, 0.08, 0.04), ledAmber, 0.69, 1.52, -0.94);
+
+  // 3. Elevated Steel Lattice Mast Tower & Maintenance Catwalk Ring
+  const mastPostGeo = new THREE.BoxGeometry(0.15, 1.55, 0.15);
+  for (const x of [-0.62, 0.62]) {
+    for (const z of [-0.42, 0.42]) {
+      vehiclePart(root, mastPostGeo, gunmetalMat, x, 2.52, z, true);
+    }
+  }
+  const braceGeo = new THREE.BoxGeometry(0.075, 1.52, 0.075);
+  for (const z of [-0.42, 0.42]) {
+    vehiclePart(root, braceGeo, oliveSteelMat, 0, 2.52, z).rotation.z = 0.68;
+    vehiclePart(root, braceGeo, oliveSteelMat, 0, 2.52, z).rotation.z = -0.68;
+  }
+  for (const x of [-0.62, 0.62]) {
+    vehiclePart(root, braceGeo, oliveSteelMat, x, 2.52, 0).rotation.x = 0.52;
+    vehiclePart(root, braceGeo, oliveSteelMat, x, 2.52, 0).rotation.x = -0.52;
+  }
+  // Circular maintenance catwalk & azimuth slewing ring
+  vehiclePart(root, new THREE.CylinderGeometry(1.08, 1.08, 0.08, 16), gunmetalMat, 0, 3.18, 0);
+  vehiclePart(root, new THREE.TorusGeometry(1.06, 0.028, 6, 16).rotateX(Math.PI / 2), hazardMat, 0, 3.62, 0);
+  vehiclePart(root, new THREE.CylinderGeometry(0.62, 0.72, 0.30, 20), oliveSteelMat, 0, 3.34, 0);
+
+  // 4. Rotating 3D Surveillance & Fire-Control Radar Array (`dishGroup`)
   const dishGroup = new THREE.Group();
-  dishGroup.position.y = 2.68;
-  vehiclePart(dishGroup,new THREE.BoxGeometry(.31,.72,.32),steel,0,.32,0);
-  const antenna = new THREE.Group();
-  antenna.position.set(0,.92,.12);
-  antenna.rotation.x = -.30;
-  dishGroup.add(antenna);
-  const rimRadius = 1.94;
-  const profile = Array.from({length:10},(_,i) => {
-    const t = i / 9;
-    return new THREE.Vector2(rimRadius * t,.60 * (t*t-1));
-  });
-  const bowl = new THREE.LatheGeometry(profile,36).rotateX(Math.PI / 2);
-  vehiclePart(antenna,bowl,reflector,0,0,0,true);
-  vehiclePart(antenna,new THREE.TorusGeometry(rimRadius,.036,8,36),steel,0,0,0);
-  vehiclePart(antenna,new THREE.CylinderGeometry(.10,.14,.35,12).rotateX(Math.PI/2),steel,0,0,.72);
-  const brace = new THREE.CylinderGeometry(.031,.031,1,8);
-  const up = new THREE.Vector3(0,1,0);
-  for (let i = 0; i < 3; i++) {
-    const angle = i * Math.PI * 2 / 3;
-    const edge = new THREE.Vector3(Math.cos(angle)*1.66,Math.sin(angle)*1.66,-.15);
-    const axis = new THREE.Vector3(0,0,.72).sub(edge);
-    const center = edge.addScaledVector(axis,.5);
-    const strut = vehiclePart(antenna,brace,steel,center.x,center.y,center.z);
-    strut.scale.y = axis.length();
-    strut.quaternion.setFromUnitVectors(up,axis.normalize());
+  dishGroup.position.y = 3.48;
+
+  // Azimuth turntable yoke & dual hydraulic elevation rams
+  vehiclePart(dishGroup, new THREE.CylinderGeometry(0.56, 0.60, 0.22, 18), gunmetalMat, 0, 0.11, 0);
+  for (const sx of [-0.36, 0.36]) {
+    vehiclePart(dishGroup, new THREE.BoxGeometry(0.18, 0.86, 0.38), oliveSteelMat, sx, 0.56, 0);
   }
+  // Rear High-Power Microwave Transmitter Counterweight Pod
+  vehiclePart(dishGroup, new THREE.BoxGeometry(0.96, 0.58, 0.82), cabinetMat, 0, 0.78, -0.64, true);
+  vehiclePart(dishGroup, new THREE.BoxGeometry(0.72, 0.38, 0.24), gunmetalMat, 0, 0.78, -1.12);
+
+  const antenna = new THREE.Group();
+  antenna.position.set(0, 1.08, 0.14);
+  antenna.rotation.x = -0.24; // Tilted upward to scan airspace
+  dishGroup.add(antenna);
+
+  // Curved Open-Mesh Parabolic Reflector (Truncated Rectangular/Elliptical Military Profile)
+  const rimRadius = 2.08;
+  const profile = Array.from({ length: 10 }, (_, i) => {
+    const t = i / 9;
+    return new THREE.Vector2(rimRadius * t, 0.58 * (t * t - 1));
+  });
+  const bowlGeo = new THREE.LatheGeometry(profile, 36).rotateX(Math.PI / 2);
+  // Scale vertically so it has the authentic wide horizontal aspect ratio of a 3D air-surveillance radar!
+  bowlGeo.scale(1.12, 0.72, 1.0);
+  vehiclePart(antenna, bowlGeo, reflectorMat, 0, 0, 0, true);
+
+  const rimGeo = new THREE.TorusGeometry(rimRadius, 0.045, 8, 36);
+  rimGeo.scale(1.12, 0.72, 1.0);
+  vehiclePart(antenna, rimGeo, gunmetalMat, 0, 0, 0);
+
+  // 7 Rear Structural Truss Ribs behind the parabolic mesh
+  for (let i = -3; i <= 3; i++) {
+    const rx = i * 0.58;
+    const ribH = Math.sqrt(Math.max(0.1, 1 - (rx / 2.3) ** 2)) * 2.65;
+    vehiclePart(antenna, new THREE.BoxGeometry(0.055, ribH, 0.14), gunmetalMat, rx, 0, -0.28);
+  }
+  vehiclePart(antenna, new THREE.BoxGeometry(4.1, 0.09, 0.16), gunmetalMat, 0, 0, -0.34);
+
+  // Forward Waveguide Feed Boom, Tripod Struts & Dual S/L-Band Feed Horns
+  vehiclePart(antenna, new THREE.CylinderGeometry(0.13, 0.18, 0.44, 14).rotateX(Math.PI / 2), oliveSteelMat, 0, 0, 0.86);
+  vehiclePart(antenna, new THREE.BoxGeometry(0.34, 0.24, 0.28), radomeTanMat, 0, 0, 1.04); // Dielectric feed window
+  const brace = new THREE.CylinderGeometry(0.036, 0.036, 1, 8);
+  const up = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < 4; i++) {
+    const angle = (i * Math.PI) / 2 + Math.PI / 4;
+    const edge = new THREE.Vector3(Math.cos(angle) * 1.85, Math.sin(angle) * 1.18, -0.14);
+    const axis = new THREE.Vector3(0, 0, 0.86).sub(edge);
+    const center = edge.addScaledVector(axis, 0.5);
+    const strut = vehiclePart(antenna, brace, gunmetalMat, center.x, center.y, center.z);
+    strut.scale.y = axis.length();
+    strut.quaternion.setFromUnitVectors(up, axis.normalize());
+  }
+
+  // Top-Mounted IFF (Identification Friend or Foe) Phased-Array Interrogator Bar Antenna
+  const iffGroup = new THREE.Group();
+  iffGroup.position.set(0, 1.62, -0.08);
+  antenna.add(iffGroup);
+  vehiclePart(iffGroup, new THREE.BoxGeometry(2.85, 0.28, 0.18), radomeTanMat, 0, 0, 0, true);
+  vehiclePart(iffGroup, new THREE.BoxGeometry(2.92, 0.06, 0.22), gunmetalMat, 0, -0.15, 0);
+  for (const sx of [-0.95, 0, 0.95]) {
+    vehiclePart(iffGroup, new THREE.BoxGeometry(0.06, 0.34, 0.08), gunmetalMat, sx, -0.26, -0.04);
+  }
+  // Red Aviation Obstruction Warning Beacon on top of the radar array
+  const beaconMat = new THREE.MeshStandardMaterial({
+    color: 0xff2222,
+    emissive: 0xff1111,
+    emissiveIntensity: 1.35,
+    roughness: 0.25
+  });
+  vehiclePart(iffGroup, new THREE.CylinderGeometry(0.055, 0.065, 0.14, 10), beaconMat, 0, 0.22, 0);
+
+  const damageGroup = new THREE.Group();
+  root.add(damageGroup);
   root.add(dishGroup);
-  return { root, dishGroup };
+  return { root, dishGroup, mainCabin, cabinetMat, camoData, damageGroup };
 }
 
 function createAmmoDepotMesh(shelter = false) {
   const root = new THREE.Group();
-  const crateGeo = new THREE.BoxGeometry(1.6, 1.0, 1.6);
-  const crateMat = new THREE.MeshStandardMaterial({ color: 0x57533e, roughness: 0.9 });
+
+  // Procedural Military Ordnance Stencil Texture for Ammunition Crates
+  const crateCanvas = document.createElement('canvas');
+  crateCanvas.width = 256;
+  crateCanvas.height = 128;
+  const cCtx = crateCanvas.getContext('2d');
+  cCtx.fillStyle = '#4a5437'; // Authentic Olive-Drab ordnance crate wood
+  cCtx.fillRect(0, 0, 256, 128);
+  // Horizontal wood plank grooves
+  cCtx.fillStyle = 'rgba(20, 24, 15, 0.42)';
+  for (let y = 24; y < 128; y += 26) cCtx.fillRect(0, y, 256, 3);
+  // Yellow NATO Ordnance Stencil Markings
+  cCtx.fillStyle = '#eab308';
+  cCtx.font = 'bold 16px "JetBrains Mono", monospace';
+  cCtx.fillText('155MM HE M795', 18, 46);
+  cCtx.font = 'bold 13px "JetBrains Mono", monospace';
+  cCtx.fillText('LOT TW-082  WT 98KG', 18, 72);
+  // Orange 1.1 High-Explosive Diamond Placard on crate
+  cCtx.save();
+  cCtx.translate(212, 54);
+  cCtx.rotate(Math.PI / 4);
+  cCtx.fillStyle = '#f97316';
+  cCtx.fillRect(-18, -18, 36, 36);
+  cCtx.strokeStyle = '#111827';
+  cCtx.lineWidth = 2.5;
+  cCtx.strokeRect(-18, -18, 36, 36);
+  cCtx.restore();
+  cCtx.fillStyle = '#111827';
+  cCtx.font = 'bold 13px monospace';
+  cCtx.textAlign = 'center';
+  cCtx.fillText('1.1', 212, 58);
+
+  const crateTex = new THREE.CanvasTexture(crateCanvas);
+  crateTex.encoding = THREE.sRGBEncoding;
+  const crateMat = new THREE.MeshStandardMaterial({ map: crateTex, roughness: 0.86, metalness: 0.08 });
+  const earthCrateMat = new THREE.MeshStandardMaterial({ color: 0x6b583e, roughness: 0.88 });
+  const palletWoodMat = new THREE.MeshStandardMaterial({ color: 0x9c764c, roughness: 0.92 });
+  const strapMat = new THREE.MeshStandardMaterial({ color: 0x262925, roughness: 0.65, metalness: 0.45 });
+  const missileTubeMat = new THREE.MeshStandardMaterial({ color: 0x34422c, roughness: 0.68, metalness: 0.32 });
+  const yellowBandMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.55 });
+  const redBandMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.55 });
+
+  // 1. Palletized High-Explosive Artillery Crates & SAM/ATGM Missile Canister Racks (`wreckPart = 'crate'`)
+  const crateGeo = new THREE.BoxGeometry(1.52, 0.78, 1.38);
+  const palletGeo = new THREE.BoxGeometry(1.66, 0.14, 1.50);
+  const strapGeo = new THREE.BoxGeometry(0.065, 0.81, 1.41);
+
   for (let i = 0; i < 6; i++) {
-    const c = new THREE.Mesh(crateGeo, crateMat);
-    c.position.set((i % 3) * 1.8 - 1.8, 0.5 + Math.floor(i / 3) * 1.0, (i % 2) * 1.8 - 0.9);
-    const strapGeo = new THREE.BoxGeometry(.085, 1.025, 1.625);
-    const strapMat = new THREE.MeshStandardMaterial({ color: 0x473d2e, roughness: .85 });
-    for (const x of [-.53, .53]) vehiclePart(c, strapGeo, strapMat, x, 0, 0);
-    c.userData.wreckPart = 'crate';
-    root.add(c);
+    const stackGroup = new THREE.Mesh(crateGeo, i % 2 === 0 ? crateMat : earthCrateMat);
+    const col = i % 3;
+    const tier = Math.floor(i / 3);
+    const rowZ = (i % 2) * 1.75 - 0.85;
+    stackGroup.position.set(col * 1.82 - 1.85, 0.52 + tier * 0.92, rowZ);
+
+    // Timber forklift pallet underneath bottom tier
+    if (tier === 0) {
+      vehiclePart(stackGroup, palletGeo, palletWoodMat, 0, -0.45, 0);
+    }
+    for (const sx of [-0.48, 0.48]) {
+      vehiclePart(stackGroup, strapGeo, strapMat, sx, 0, 0);
+    }
+    // On upper tier, mount cylindrical SAM/ATGM twin missile launch canisters with yellow HE warhead rings!
+    if (tier === 1 && col !== 1) {
+      const tubeGeo = new THREE.CylinderGeometry(0.19, 0.19, 1.65, 14).rotateZ(Math.PI / 2);
+      const ringGeo = new THREE.CylinderGeometry(0.196, 0.196, 0.08, 14).rotateZ(Math.PI / 2);
+      for (const tz of [-0.26, 0.26]) {
+        vehiclePart(stackGroup, tubeGeo, missileTubeMat, 0, 0.58, tz);
+        vehiclePart(stackGroup, ringGeo, yellowBandMat, -0.45, 0.58, tz);
+        vehiclePart(stackGroup, ringGeo, redBandMat, 0.35, 0.58, tz);
+      }
+    }
+    stackGroup.castShadow = true;
+    stackGroup.receiveShadow = true;
+    stackGroup.userData.wreckPart = 'crate';
+    root.add(stackGroup);
   }
 
-  const drumGeo = new THREE.CylinderGeometry(0.45, 0.45, 1.2, 16);
-  const drumMat = new THREE.MeshStandardMaterial({ color: 0x555b47, metalness: 0.6, roughness: 0.4 });
-  for (let j = 0; j < 4; j++) {
-    const d = new THREE.Mesh(drumGeo, drumMat);
-    d.position.set(2.4, 0.6, j * 1.0 - 1.5);
-    const hoop = new THREE.CylinderGeometry(.465, .465, .048, 16);
-    for (const y of [-.32, .32]) vehiclePart(d, hoop, drumMat, 0, y, 0);
+  // 2. Color-Coded 200L POL Fuel & Liquid Propellant Drums (`wreckPart = 'drum'`)
+  const drumGeo = new THREE.CylinderGeometry(0.42, 0.42, 1.18, 18);
+  const hoopGeo = new THREE.CylinderGeometry(0.438, 0.438, 0.045, 18);
+  const drumRedMat = new THREE.MeshStandardMaterial({ color: 0x8c281c, metalness: 0.48, roughness: 0.46 });
+  const drumOliveMat = new THREE.MeshStandardMaterial({ color: 0x3e4c34, metalness: 0.48, roughness: 0.46 });
+  const drumOchreMat = new THREE.MeshStandardMaterial({ color: 0xb45309, metalness: 0.45, roughness: 0.48 });
+
+  for (let j = 0; j < 6; j++) {
+    const dMat = j % 3 === 0 ? drumRedMat : (j % 3 === 1 ? drumOliveMat : drumOchreMat);
+    const d = new THREE.Mesh(drumGeo, dMat);
+    const col = Math.floor(j / 3);
+    const row = j % 3;
+    d.position.set(2.25 + col * 0.94, 0.59, row * 1.05 - 1.15);
+    for (const y of [-0.32, 0.32]) {
+      vehiclePart(d, hoopGeo, strapMat, 0, y, 0);
+    }
+    // Hazard identification band around middle of drum
+    vehiclePart(d, new THREE.CylinderGeometry(0.426, 0.426, 0.14, 18), yellowBandMat, 0, 0, 0);
+    d.castShadow = true;
+    d.receiveShadow = true;
     d.userData.wreckPart = 'drum';
     root.add(d);
   }
+
+  // 3. Hardened Reinforced Concrete & Camo Corrugated Steel Munitions Bunker (`shelter === true`)
   if (shelter) {
-    const concrete = new THREE.MeshStandardMaterial({color:0x777b6e,roughness:.96});
-    const panels = new THREE.MeshStandardMaterial({color:0x555e49,roughness:.87,metalness:.15});
-    const frame = new THREE.MeshStandardMaterial({color:0x383d33,roughness:.83,metalness:.27});
-    vehiclePart(root,new THREE.BoxGeometry(7.4,.18,6.5),concrete,0,.09,0,true);
-    vehiclePart(root,new THREE.BoxGeometry(7.2,2.65,.22),concrete,0,1.42,2.95,true);
-    const sideWall = new THREE.BoxGeometry(.21,2.65,6.0);
-    const roofPanel = new THREE.BoxGeometry(3.77,.15,6.37,6,1,8);
-    const rib = new THREE.BoxGeometry(.041,.069,6.34);
-    for (const side of [-1,1]) {
-      vehiclePart(root,sideWall,concrete,side*3.49,1.42,0,true);
-      vehiclePart(root,new THREE.BoxGeometry(.27,2.72,.31),frame,side*3.29,1.46,-2.89,true);
-      const roof = vehiclePart(root,roofPanel,panels,side*1.83,3.03,0,true);
-      roof.rotation.z = -side*.12;
+    const concrete = new THREE.MeshStandardMaterial({ color: 0x7b7d72, roughness: 0.95 });
+    const darkConcrete = new THREE.MeshStandardMaterial({ color: 0x55574f, roughness: 0.96 });
+    const camoRoofData = createMilitaryCamoTexture('#45543b', '#63533d', '#282e26');
+    const panels = new THREE.MeshStandardMaterial({ map: camoRoofData.tex, roughness: 0.82, metalness: 0.22 });
+    const frame = new THREE.MeshStandardMaterial({ color: 0x2f352c, roughness: 0.78, metalness: 0.38 });
+    const hazardMat = createHazardStripeMaterial();
+    const fireRedMat = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.55, metalness: 0.25 });
+
+    // Heavy reinforced concrete bunker foundation & rear blast wall with buttresses
+    vehiclePart(root, new THREE.BoxGeometry(8.2, 0.22, 7.0), concrete, 0, 0.11, 0, true);
+    vehiclePart(root, new THREE.BoxGeometry(7.8, 2.85, 0.36), concrete, 0, 1.52, 3.12, true);
+    for (const bx of [-2.8, 0, 2.8]) {
+      vehiclePart(root, new THREE.BoxGeometry(0.38, 2.75, 0.55), darkConcrete, bx, 1.48, 3.45, true);
+    }
+
+    const sideWall = new THREE.BoxGeometry(0.34, 2.85, 6.4);
+    const buttress = new THREE.BoxGeometry(0.42, 2.25, 0.48);
+    const roofPanel = new THREE.BoxGeometry(4.15, 0.16, 6.85, 6, 1, 8);
+    const rib = new THREE.BoxGeometry(0.055, 0.085, 6.82);
+
+    for (const side of [-1, 1]) {
+      vehiclePart(root, sideWall, concrete, side * 3.75, 1.52, 0, true);
+      // External sloped concrete blast buttresses along side walls
+      for (const bz of [-2.1, 0, 2.1]) {
+        const bMesh = vehiclePart(root, buttress, darkConcrete, side * 4.02, 1.18, bz, true);
+        bMesh.rotation.z = side * 0.14;
+      }
+      // Front armored portal columns with yellow-black hazard warning stripes
+      vehiclePart(root, new THREE.BoxGeometry(0.38, 2.92, 0.42), frame, side * 3.55, 1.56, -3.08, true);
+      vehiclePart(root, new THREE.BoxGeometry(0.41, 1.35, 0.44), hazardMat, side * 3.55, 0.78, -3.08);
+
+      const roof = vehiclePart(root, roofPanel, panels, side * 1.98, 3.22, 0, true);
+      roof.rotation.z = -side * 0.13;
       roof.userData.wreckPart = 'roof';
       for (let i = 0; i < 10; i++) {
-        const dx = .18 + i*.365;
-        const strip = vehiclePart(root,rib,frame,side*dx,3.34-dx*.12,0);
-        strip.rotation.z = -side*.12;
+        const dx = 0.20 + i * 0.385;
+        const strip = vehiclePart(root, rib, frame, side * dx, 3.56 - dx * 0.13, 0);
+        strip.rotation.z = -side * 0.13;
         strip.userData.visualOnly = true;
       }
     }
-    vehiclePart(root,new THREE.BoxGeometry(6.83,.29,.23),frame,0,2.72,-2.94,true);
-    const threshold = vehiclePart(root,new THREE.BoxGeometry(5.4,.04,.22),
-      new THREE.MeshStandardMaterial({color:0x82734d,roughness:.86}),0,.20,-3.02);
+
+    // Front Steel Portal Header Beam & High-Visibility "DANGER 1.1 EXPLOSIVES" Signboard
+    vehiclePart(root, new THREE.BoxGeometry(7.45, 0.36, 0.34), frame, 0, 2.92, -3.12, true);
+
+    const signCanvas = document.createElement('canvas');
+    signCanvas.width = 512;
+    signCanvas.height = 96;
+    const sCtx = signCanvas.getContext('2d');
+    sCtx.fillStyle = '#1e241e';
+    sCtx.fillRect(0, 0, 512, 96);
+    sCtx.strokeStyle = '#eab308';
+    sCtx.lineWidth = 5;
+    sCtx.strokeRect(4, 4, 504, 88);
+    // Left & Right Orange 1.1 Explosive Diamonds
+    for (const dx of [54, 458]) {
+      sCtx.save();
+      sCtx.translate(dx, 48);
+      sCtx.rotate(Math.PI / 4);
+      sCtx.fillStyle = '#f97316';
+      sCtx.fillRect(-24, -24, 48, 48);
+      sCtx.strokeStyle = '#111827';
+      sCtx.lineWidth = 3;
+      sCtx.strokeRect(-24, -24, 48, 48);
+      sCtx.restore();
+      sCtx.fillStyle = '#111827';
+      sCtx.font = 'bold 18px monospace';
+      sCtx.textAlign = 'center';
+      sCtx.fillText('1.1', dx, 54);
+    }
+    sCtx.fillStyle = '#ef4444';
+    sCtx.font = 'bold 26px "Segoe UI", sans-serif';
+    sCtx.textAlign = 'center';
+    sCtx.fillText('高爆彈藥庫 DANGER EXPLOSIVES', 256, 44);
+    sCtx.fillStyle = '#fde047';
+    sCtx.font = 'bold 18px "JetBrains Mono", monospace';
+    sCtx.fillText('NO SMOKING / 嚴禁煙火 · KEEP CLEAR 50M', 256, 74);
+
+    const signTex = new THREE.CanvasTexture(signCanvas);
+    signTex.encoding = THREE.sRGBEncoding;
+    const signMat = new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.55 });
+    const signMesh = vehiclePart(root, new THREE.PlaneGeometry(3.8, 0.56), signMat, 0, 2.96, -3.30);
+    signMesh.userData.visualOnly = true;
+
+    // Rooftop Ventilation Turbines & Interior Explosion-Proof Amber Work Lights
+    for (const vx of [-1.4, 1.4]) {
+      vehiclePart(root, new THREE.CylinderGeometry(0.24, 0.20, 0.34, 12), frame, vx, 3.68, 0.4);
+    }
+    const bunkerLightMat = new THREE.MeshStandardMaterial({
+      color: 0xffd166,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 0.95
+    });
+    for (const lx of [-1.8, 1.8]) {
+      vehiclePart(root, new THREE.BoxGeometry(0.45, 0.08, 0.22), bunkerLightMat, lx, 2.76, -0.4);
+    }
+
+    // Red Fire-Suppression Sand Drums & Extinguisher Post outside left portal
+    for (const fz of [-2.4, -1.6]) {
+      vehiclePart(root, new THREE.CylinderGeometry(0.28, 0.28, 0.72, 14), fireRedMat, -4.25, 0.46, fz);
+    }
+    const threshold = vehiclePart(root, new THREE.BoxGeometry(6.2, 0.045, 0.28), hazardMat, 0, 0.22, -3.22);
     threshold.userData.visualOnly = true;
   }
   return root;
@@ -4336,28 +5502,87 @@ function createAmmoDepotMesh(shelter = false) {
 
 function createBombMesh() {
   const group = new THREE.Group();
-  const fuseGeo = new THREE.CylinderGeometry(0.04, 0.08, 0.15, 12);
-  const fuseMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.9 });
-  const fuse = new THREE.Mesh(fuseGeo, fuseMat);
-  fuse.position.y = -0.45;
-  group.add(fuse);
 
-  const bodyGeo = new THREE.CylinderGeometry(0.12, 0.09, 0.68, 16);
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.6, metalness: 0.7 });
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  group.add(body);
+  // 82mm Modern Air-Drop Modified Mortar Round (O-832DU / NATO 81-82mm hybrid)
+  // Axis convention: Local -Z is forward (Nose & Impact Fuze), +Z is rear (Tail Boom & Shroud).
+  // 1. Aerodynamic Teardrop Cast-Iron Body (Ogive profile via LatheGeometry)
+  const bodyPoints = [
+    new THREE.Vector2(0.008, -0.32), // striker needle tip
+    new THREE.Vector2(0.022, -0.28), // fuze cone
+    new THREE.Vector2(0.038, -0.23), // fuze-body junction
+    new THREE.Vector2(0.065, -0.16), // expanding front ogive
+    new THREE.Vector2(0.092, -0.06), // shoulder curve
+    new THREE.Vector2(0.104, 0.02),  // maximum bourrelet guidance diameter
+    new THREE.Vector2(0.100, 0.10),  // cylindrical midsection
+    new THREE.Vector2(0.076, 0.18),  // boat-tail taper begins
+    new THREE.Vector2(0.046, 0.25),  // narrowing to neck
+    new THREE.Vector2(0.026, 0.29),  // tail boom collar
+    new THREE.Vector2(0.024, 0.46)   // slender tail boom tube
+  ];
+  const bodyGeo = new THREE.LatheGeometry(bodyPoints, 22);
+  bodyGeo.rotateX(Math.PI / 2); // maps Y to Z: nose (y<0) at -Z, tail boom (y>0) at +Z
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x3d4734, // Olive Drab cast iron
+    roughness: 0.72,
+    metalness: 0.38
+  });
+  const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+  group.add(bodyMesh);
 
-  const stripe = new THREE.MeshStandardMaterial({ color: 0xb49355, roughness: .72 });
-  vehiclePart(group, new THREE.CylinderGeometry(.109, .107, .042, 20), stripe, 0, -.08, 0);
-  vehiclePart(group, new THREE.CylinderGeometry(.119, .117, .032, 20), stripe, 0, .24, 0);
-  const finGeo = new THREE.BoxGeometry(0.38, 0.18, 0.02);
-  const finMat = new THREE.MeshStandardMaterial({ color: 0x52525b, metalness: 0.8 });
-  for (let i = 0; i < 2; i++) {
+  // 2. Nose Striker Needle & Metal Fuze Collar (碰炸引信)
+  const strikerGeo = new THREE.CylinderGeometry(0.016, 0.006, 0.07, 12);
+  strikerGeo.rotateX(Math.PI / 2);
+  const strikerMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.95, roughness: 0.18 });
+  const striker = new THREE.Mesh(strikerGeo, strikerMat);
+  striker.position.z = -0.34;
+  group.add(striker);
+
+  // 3. 3D-Printed Arming Vane / Spinner (解保風輪)
+  const vaneGeo = new THREE.CylinderGeometry(0.038, 0.038, 0.016, 8);
+  vaneGeo.rotateX(Math.PI / 2);
+  const vaneMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.45 }); // Safety orange PLA
+  const armingVane = new THREE.Mesh(vaneGeo, vaneMat);
+  armingVane.position.z = -0.27;
+  group.add(armingVane);
+
+  // 4. Yellow High-Explosive Stencil Band (TNT黃色高爆色環)
+  const tntRingGeo = new THREE.CylinderGeometry(0.082, 0.086, 0.035, 22);
+  tntRingGeo.rotateX(Math.PI / 2);
+  const tntRingMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.65 });
+  const tntRing = new THREE.Mesh(tntRingGeo, tntRingMat);
+  tntRing.position.z = -0.11;
+  group.add(tntRing);
+
+  // 5. Copper Guidance / Driving Band (紫銅定心導帶)
+  const copperBandGeo = new THREE.CylinderGeometry(0.105, 0.105, 0.026, 22);
+  copperBandGeo.rotateX(Math.PI / 2);
+  const copperBandMat = new THREE.MeshStandardMaterial({ color: 0xcd7f32, metalness: 0.88, roughness: 0.28 });
+  const copperBand = new THREE.Mesh(copperBandGeo, copperBandMat);
+  copperBand.position.z = 0.04;
+  group.add(copperBand);
+
+  // 6. 6-Blade Aerodynamic Radial Tail Fins (6片式金屬薄尾翼)
+  const finGeo = new THREE.BoxGeometry(0.008, 0.18, 0.13);
+  const finMat = new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.8, roughness: 0.5 });
+  for (let i = 0; i < 6; i++) {
     const fin = new THREE.Mesh(finGeo, finMat);
-    fin.position.y = 0.32;
-    fin.rotation.y = (i * Math.PI) / 2;
+    fin.position.z = 0.41;
+    fin.rotation.z = (i * Math.PI) / 3;
     group.add(fin);
   }
+
+  // 7. 3D-Printed Circular Air-Drop Shroud Ring (烏克蘭實戰經典空投環形導流罩)
+  const shroudGeo = new THREE.CylinderGeometry(0.094, 0.094, 0.075, 22, 1, true);
+  shroudGeo.rotateX(Math.PI / 2);
+  const shroudMat = new THREE.MeshStandardMaterial({
+    color: 0xeb5e28, // High-vis military PLA orange
+    roughness: 0.52,
+    side: THREE.DoubleSide
+  });
+  const shroud = new THREE.Mesh(shroudGeo, shroudMat);
+  shroud.position.z = 0.41;
+  group.add(shroud);
+
   return group;
 }
 
@@ -4403,18 +5628,19 @@ function buildCCIPMarker() {
   ccipMarkerMesh.visible = false;
 }
 
-const wildernessRadarSite = { x: -110, z: -185, radius: 13, height: 29 };
+const wildernessRadarSite = { x: -116, z: -182, radius: 14.5, height: 33.8 };
+const wildernessDepotSite = { x: 42, z: -248, radius: 15.5, height: 5.8 };
 const wildernessRoads = [
   // Access roads end outside the concrete pads; the road material fades at each end.
-  [[10,4],[25,-8],[31,-34],[18,-66],[10,-110],[32,-148],[55,-195],[37,-228],[32,-237]],
+  [[10,4],[25,-8],[31,-34],[18,-66],[10,-110],[32,-148],[55,-195],[44,-222],[42,-234]],
   [[-65,-110],[10,-110],[65,-110]],
   [[55,-195],[135,-195]],
-  [[-34,-110],[-52,-133],[-77,-151],[wildernessRadarSite.x + 8, wildernessRadarSite.z + 13]]
+  [[-34,-110],[-56,-132],[-82,-150],[-102,-166],[wildernessRadarSite.x + 8, wildernessRadarSite.z + 13]]
 ];
 const wildernessSites = [
   {x:0,z:0,radius:18,height:0},
   wildernessRadarSite,
-  {x:25,z:-250,radius:14,height:2.5}
+  wildernessDepotSite
 ];
 const wildernessColliders = [];
 const wildernessColliderCells = new Map();
@@ -4515,6 +5741,195 @@ function wildernessHeight(x,z) {
   return height;
 }
 
+// ============================================================================
+// VEGETATION PROCEDURAL GEOMETRIES & GPU WIND SWAY DYNAMICS
+// ============================================================================
+const treeWindUniforms = {
+  uWindTime: { value: 0 },
+  uWindSpeed: { value: 1.0 },
+  uWindDir: { value: new THREE.Vector2(1, 0) },
+  uGust: { value: 0.0 }
+};
+
+function applyTreeWindShader(material, isCanopy = false) {
+  if (!material) return material;
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = treeWindUniforms.uWindTime;
+    shader.uniforms.uWindSpeed = treeWindUniforms.uWindSpeed;
+    shader.uniforms.uWindDir = treeWindUniforms.uWindDir;
+    shader.uniforms.uGust = treeWindUniforms.uGust;
+
+    shader.vertexShader = `
+      uniform float uWindTime;
+      uniform float uWindSpeed;
+      uniform vec2 uWindDir;
+      uniform float uGust;
+    ` + shader.vertexShader;
+
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      `
+      vec4 mvPosition = vec4( transformed, 1.0 );
+
+      #ifdef USE_INSTANCING
+        mvPosition = instanceMatrix * mvPosition;
+      #endif
+
+      float windH = max(0.0, transformed.y);
+      float bendExp = ${isCanopy ? '1.35' : '1.75'};
+      float windBend = pow(windH * 0.32, bendExp) * (uWindSpeed * 0.052 + uGust * 0.040);
+      float windPhase = uWindTime * (1.15 + uWindSpeed * 0.08) + (mvPosition.x * 0.045 + mvPosition.z * 0.038);
+      float windSway = sin(windPhase) * 0.72 + sin(windPhase * 2.14 + 1.2) * 0.28;
+      float windFlutter = sin(uWindTime * 4.6 + mvPosition.x * 0.32) * cos(uWindTime * 3.7 + mvPosition.z * 0.32) * (uWindSpeed * 0.016);
+      vec2 disp = uWindDir * (windBend * (1.0 + windSway * 0.45) + windFlutter * windH * 0.35);
+      mvPosition.x += disp.x;
+      mvPosition.z += disp.y;
+      mvPosition.y -= length(disp) * 0.16;
+
+      mvPosition = modelViewMatrix * mvPosition;
+
+      gl_Position = projectionMatrix * mvPosition;
+      `
+    );
+  };
+  return material;
+}
+
+function updateTreeWind(dt) {
+  const w = (typeof WEATHER_PROFILES !== 'undefined' && WEATHER_PROFILES[state.weather])
+    ? WEATHER_PROFILES[state.weather]
+    : { windSpeed: 2.5, gustSpeed: 4.0, windAngle: 0.4 };
+
+  const tNow = performance.now() * 0.001;
+  const gustWave = Math.max(0, Math.sin(tNow * 1.15) * 0.45 + Math.cos(tNow * 2.35) * 0.35 + Math.sin(tNow * 3.95) * 0.20);
+  const gustSpread = Math.max(0, (w.gustSpeed || w.windSpeed || 0) - (w.windSpeed || 0));
+  const instSpeed = (w.windSpeed || 0) + gustWave * gustSpread;
+  const wAng = w.windAngle || 0.4;
+
+  treeWindUniforms.uWindTime.value = tNow;
+  treeWindUniforms.uWindSpeed.value = instSpeed;
+  treeWindUniforms.uWindDir.value.set(Math.cos(wAng), Math.sin(wAng));
+  treeWindUniforms.uGust.value = gustWave * gustSpread;
+}
+
+function mergeBufferGeometriesSimple(geos) {
+  let totalPos = 0, totalIdx = 0;
+  for (const g of geos) {
+    totalPos += g.attributes.position.count;
+    totalIdx += g.index ? g.index.count : g.attributes.position.count;
+  }
+  const posArr = new Float32Array(totalPos * 3);
+  const normArr = new Float32Array(totalPos * 3);
+  const uvArr = new Float32Array(totalPos * 2);
+  const idxArr = totalPos > 65535 ? new Uint32Array(totalIdx) : new Uint16Array(totalIdx);
+
+  let posOff = 0, idxOff = 0, vertCount = 0;
+  for (const g of geos) {
+    const pos = g.attributes.position;
+    const norm = g.attributes.normal;
+    const uv = g.attributes.uv;
+    posArr.set(pos.array, posOff * 3);
+    if (norm) normArr.set(norm.array, posOff * 3);
+    if (uv) uvArr.set(uv.array, posOff * 2);
+
+    if (g.index) {
+      for (let i = 0; i < g.index.count; i++) {
+        idxArr[idxOff + i] = g.index.array[i] + vertCount;
+      }
+      idxOff += g.index.count;
+    } else {
+      for (let i = 0; i < pos.count; i++) {
+        idxArr[idxOff + i] = vertCount + i;
+      }
+      idxOff += pos.count;
+    }
+    vertCount += pos.count;
+    posOff += pos.count;
+    g.dispose();
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normArr, 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+  merged.setIndex(new THREE.BufferAttribute(idxArr, 1));
+  return merged;
+}
+
+function createVolumetricCanopyGeometry() {
+  const geos = [];
+  // 3 vertical cross-planes at 0, 60, 120 degrees
+  for (let a = 0; a < 3; a++) {
+    const angle = (a * Math.PI) / 3;
+    const plane = new THREE.PlaneGeometry(1.0, 1.0);
+    plane.rotateY(angle);
+    geos.push(plane);
+  }
+  // Upper horizontal leaf cap (convex dome)
+  const topCap = new THREE.PlaneGeometry(0.92, 0.92);
+  topCap.rotateX(-Math.PI / 2);
+  topCap.translate(0, 0.28, 0);
+  geos.push(topCap);
+
+  // Lower horizontal leaf cap
+  const midCap = new THREE.PlaneGeometry(0.85, 0.85);
+  midCap.rotateX(Math.PI / 2);
+  midCap.translate(0, -0.18, 0);
+  geos.push(midCap);
+
+  return mergeBufferGeometriesSimple(geos);
+}
+
+function createConiferFoliageGeometry() {
+  const geos = [];
+  // 4 tiered 8-sided conical branch skirts tapering upwards
+  const tiers = [
+    { r: 0.62, h: 0.38, y: -0.32 },
+    { r: 0.50, h: 0.38, y: -0.06 },
+    { r: 0.36, h: 0.38, y: 0.18 },
+    { r: 0.20, h: 0.44, y: 0.44 }
+  ];
+  tiers.forEach((t) => {
+    const cone = new THREE.ConeGeometry(t.r, t.h, 8, 1, false);
+    cone.translate(0, t.y, 0);
+    geos.push(cone);
+  });
+  // 2 crossed vertical interior needle cards for dense shadow core
+  for (let a = 0; a < 2; a++) {
+    const card = new THREE.PlaneGeometry(0.85, 1.15);
+    card.rotateY((a * Math.PI) / 2 + Math.PI / 4);
+    geos.push(card);
+  }
+  return mergeBufferGeometriesSimple(geos);
+}
+
+function createShrubFoliageGeometry() {
+  const geos = [];
+  for (let a = 0; a < 2; a++) {
+    const plane = new THREE.PlaneGeometry(1.3, 0.72);
+    plane.rotateY((a * Math.PI) / 2);
+    plane.translate(0, 0.36, 0);
+    geos.push(plane);
+  }
+  const top = new THREE.PlaneGeometry(1.1, 1.1);
+  top.rotateX(-Math.PI / 2);
+  top.translate(0, 0.42, 0);
+  geos.push(top);
+  return mergeBufferGeometriesSimple(geos);
+}
+
+function createWeatheredBoulderGeometry() {
+  const geo = new THREE.DodecahedronGeometry(1.0, 0);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    let vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
+    if (vy < -0.15) vy = -0.15 + (vy + 0.15) * 0.28; // flattened underside
+    const erosion = 1.0 + 0.24 * Math.sin(vx * 4.1 + vy * 3.3) * Math.cos(vz * 3.7);
+    pos.setXYZ(i, vx * erosion * 1.18, vy * erosion * 0.85, vz * erosion * 0.98);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function* buildWildernessLandscape(group) {
   let seed = 719;
   const random = () => {
@@ -4562,34 +5977,47 @@ function* buildWildernessLandscape(group) {
   const position = ground.attributes.position;
   const colors = [];
   const turf = new THREE.Color(0x63724a), slope = new THREE.Color(0x465b3d);
+  const rockFace = new THREE.Color(0x7c7463), valleyShade = new THREE.Color(0x3a4731);
   const soil = new THREE.Color(0x9b825c), gravel = new THREE.Color(0xb19d7c), tint = new THREE.Color();
   for (let i=0;i<position.count;i++) {
     if (i % 128 === 0) yield;
     const x=position.getX(i), z=position.getZ(i), y=wildernessHeight(x,z);
     position.setY(i,y);
+    // Compute topographic gradient (dh/dx, dh/dz) for slope steepness, solar aspect & valley AO
+    const dhdx = (wildernessHeight(x + 1.5, z) - wildernessHeight(x - 1.5, z)) / 3.0;
+    const dhdz = (wildernessHeight(x, z + 1.5) - wildernessHeight(x, z - 1.5)) / 3.0;
+    const gradMag = Math.hypot(dhdx, dhdz);
+    const steepness = THREE.MathUtils.smoothstep(gradMag, 0.24, 0.72);
+    const solarAspect = THREE.MathUtils.clamp((-dhdx * 0.65 - dhdz * 0.45) * 0.22, -0.10, 0.12);
+    const valleyAO = THREE.MathUtils.smoothstep(y, -1.2, 6.5) * 0.12 + 0.88;
+
     const patch = .5+.25*Math.sin(x*.067+z*.035)+.22*Math.cos(z*.076-x*.023);
     const exposedSoil = THREE.MathUtils.smoothstep(
       .55*Math.sin(x*.12+z*.055)+.45*Math.cos(z*.16-x*.083),.20,.88);
     tint.copy(turf).lerp(slope,THREE.MathUtils.clamp(y/35,0,.85))
-      .lerp(soil,Math.min(.85,patch*.32+exposedSoil*.51));
+      .lerp(soil,Math.min(.85,patch*.32+exposedSoil*.51))
+      .lerp(rockFace, steepness * 0.68);
+    if (y < 4.5) tint.lerp(valleyShade, (1.0 - THREE.MathUtils.clamp((y + 1.5) / 6.0, 0, 1)) * 0.28);
     tint.lerp(gravel,1-THREE.MathUtils.smoothstep(wildernessRoadDistance(x,z),2.8,6.3));
     const clearing = 1 - THREE.MathUtils.smoothstep(Math.hypot(x*.91,z),5.6,10);
     const rutDistance = Math.abs(Math.abs(x) - 2.6);
     const rut = Math.exp(-((rutDistance/.60)**2)) * clearing;
     tint.lerp(soil,clearing*.72);
-    const erosion = .97 + .07 * Math.sin(x * .51 + z * .22) * Math.cos(z * .34) - rut*.19;
+    const erosion = (.97 + .07 * Math.sin(x * .51 + z * .22) * Math.cos(z * .34) - rut*.19) * valleyAO + solarAspect;
     tint.multiplyScalar((.91+random()*.18) * erosion);
     colors.push(tint.r,tint.g,tint.b);
   }
   wildernessTerrainPositions = position;
   ground.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
   ground.computeVertexNormals();
-  const land = new THREE.Mesh(ground,new THREE.MeshStandardMaterial({map:grain,bumpMap:grain,bumpScale:.075,vertexColors:true,roughness:.98}));
+  wildernessLandMat = new THREE.MeshStandardMaterial({map:grain,bumpMap:grain,bumpScale:.095,vertexColors:true,roughness:.95,metalness:.02});
+  const land = new THREE.Mesh(ground,wildernessLandMat);
   land.receiveShadow = true;
   group.add(land);
 
   yield '鋪設戰場道路';
-  const pathMaterial = new THREE.MeshStandardMaterial({color:0x947d60,roughness:.99,vertexColors:true});
+  const pathMaterial = new THREE.MeshStandardMaterial({color:0x947d60,roughness:.94,metalness:.03,vertexColors:true});
+  wildernessRoadMat = pathMaterial;
   const roadOffsets = [-3.6,-2.6,-1.8,-1.25,-.7,0,.7,1.25,1.8,2.6,3.6];
   const fadeSize = 64;
   const fade = new Uint8Array(fadeSize * fadeSize * 4);
@@ -4652,199 +6080,228 @@ function* buildWildernessLandscape(group) {
 
   yield '配置植被與岩石';
   const trees = [], stones = [], shrubs = [];
-  for (let i=0;i<2450;i++) {
+  for (let i = 0; i < 2450; i++) {
     if (i % 128 === 0) yield;
-    const x=(random()-.5)*535,z=32-random()*365;
-    const y=wildernessHeight(x,z);
-    if (wildernessRoadDistance(x,z)<7 || wildernessSites.some(site=>Math.hypot(x-site.x,z-site.z)<site.radius+4)) continue;
-    const scale=.48+random()*1.27;
-    const forest = Math.sin(x*.051+z*.024)+Math.cos(z*.054-x*.031);
-    if (y>7 && forest>.04) trees.push([x,y,z,scale]);
-    else if (i%5===0) stones.push([x,y,z,scale]);
-    else if (i%3===0) shrubs.push([x,y,z,scale]);
-  }
-  function scatter(positions,geometry,color,height,width,vertical,shadow=false,leafMap=null,colliderLabel=null,barkMap=null) {
-    const material=new THREE.MeshStandardMaterial({
-      color,roughness:.96,vertexColors:geometry.hasAttribute('color'),
-      map:leafMap || barkMap,bumpMap:barkMap,bumpScale:barkMap ? .055 : 0,
-      alphaTest:leafMap ? .44 : 0,side:leafMap ? THREE.DoubleSide : THREE.FrontSide
-    });
-    const mesh=new THREE.InstancedMesh(geometry,material,positions.length);
-    const transform=new THREE.Object3D(), tint=new THREE.Color();
-    positions.forEach(([x,y,z,scale],i)=>{
-      transform.position.set(x,y+height*scale,z);
-      transform.scale.set(width*scale,vertical*scale,width*scale);
-      transform.rotation.y=random()*Math.PI*2;
-      transform.updateMatrix();
-      mesh.setMatrixAt(i,transform.matrix);
-      if (colliderLabel) addWildernessCollider(geometry, transform.matrix, colliderLabel);
-      tint.setScalar(.68+random()*.40);
-      mesh.setColorAt(i,tint);
-    });
-    mesh.castShadow=shadow;
-    if (shadow && leafMap) {
-      mesh.customDepthMaterial=new THREE.MeshDepthMaterial({
-        map:leafMap,alphaTest:.44,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking
-      });
+    const x = (random() - .5) * 535, z = 32 - random() * 365;
+    const y = wildernessHeight(x, z);
+    if (wildernessRoadDistance(x, z) < 7 || wildernessSites.some((site) => Math.hypot(x - site.x, z - site.z) < site.radius + 4)) continue;
+    const scale = .48 + random() * 1.27;
+    const forest = Math.sin(x * .051 + z * .024) + Math.cos(z * .054 - x * .031);
+    if (y > 7 && forest > .04) {
+      trees.push([x, y, z, scale]);
+    } else {
+      // Topographic gradient steepness for natural rock placement on crags and slopes
+      const dhdx = (wildernessHeight(x + 1.5, z) - wildernessHeight(x - 1.5, z)) / 3.0;
+      const dhdz = (wildernessHeight(x, z + 1.5) - wildernessHeight(x, z - 1.5)) / 3.0;
+      const steepness = Math.hypot(dhdx, dhdz);
+      // Stones only on rocky ridges or steep slope outcrops (steepness > 0.30 or crest y > 15), NOT flat meadows!
+      if ((y > 15 || steepness > 0.30) && (i % 24 === 0)) {
+        stones.push([x, y, z, 0.55 + random() * 0.70]);
+      } else if (i % 7 === 0) {
+        // Natural leafy bushes/shrubs clustered in hollows and forest fringes
+        shrubs.push([x, y, z, 0.60 + random() * 0.65]);
+      }
     }
-    mesh.receiveShadow=true;
-    mesh.frustumCulled=false;
+  }
+
+  function scatter(positions, geometry, color, height, width, vertical, shadow = false, leafMap = null, colliderLabel = null, barkMap = null, windType = 'none') {
+    const material = new THREE.MeshStandardMaterial({
+      color, roughness: .96, vertexColors: geometry.hasAttribute('color'),
+      map: leafMap || barkMap, bumpMap: barkMap, bumpScale: barkMap ? .055 : 0,
+      alphaTest: leafMap ? .44 : 0, side: leafMap ? THREE.DoubleSide : THREE.FrontSide
+    });
+    if (windType !== 'none') {
+      applyTreeWindShader(material, windType === 'canopy');
+    }
+    const mesh = new THREE.InstancedMesh(geometry, material, positions.length);
+    const transform = new THREE.Object3D(), tint = new THREE.Color();
+    positions.forEach(([x, y, z, scale], i) => {
+      transform.position.set(x, y + height * scale, z);
+      transform.scale.set(width * scale, vertical * scale, width * scale);
+      transform.rotation.y = random() * Math.PI * 2;
+      transform.updateMatrix();
+      mesh.setMatrixAt(i, transform.matrix);
+      if (colliderLabel) addWildernessCollider(geometry, transform.matrix, colliderLabel);
+      tint.setScalar(.68 + random() * .40);
+      mesh.setColorAt(i, tint);
+    });
+    mesh.castShadow = shadow;
+    if (shadow) {
+      const depthMat = new THREE.MeshDepthMaterial({
+        map: leafMap || undefined,
+        alphaTest: leafMap ? .44 : 0,
+        side: leafMap ? THREE.DoubleSide : THREE.FrontSide,
+        depthPacking: THREE.RGBADepthPacking
+      });
+      if (windType !== 'none') {
+        applyTreeWindShader(depthMat, windType === 'canopy');
+      }
+      mesh.customDepthMaterial = depthMat;
+    }
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
     group.add(mesh);
   }
+
   const broadleaf = [], conifers = [], sparseTrees = [];
   for (const tree of trees) {
-    const [x,y,z] = tree;
-    const zone = Math.sin(x*.026+z*.019) + .38*Math.cos(z*.049-x*.022);
+    const [x, y, z] = tree;
+    const zone = Math.sin(x * .026 + z * .019) + .38 * Math.cos(z * .049 - x * .022);
     if (y > 13 && zone > .24) conifers.push(tree);
     else if (zone < -.42) sparseTrees.push(tree);
     else broadleaf.push(tree);
   }
 
+  // Bark Texture with deep vertical furrow lines & moss patches
   const barkCanvas = document.createElement('canvas');
   barkCanvas.width = 128;
   barkCanvas.height = 256;
   const bark = barkCanvas.getContext('2d');
-  bark.fillStyle = '#76604b';
-  bark.fillRect(0,0,128,256);
-  for (let i = 0; i < 145; i++) {
-    const x = (i*71)%128, y = (i*113)%256;
-    const length = 18+i%48;
-    bark.strokeStyle = i%3 ? 'rgba(40,29,23,.39)' : 'rgba(188,158,119,.42)';
-    bark.lineWidth = 1+i%3;
-    for (const wrap of [-256,0,256]) {
+  bark.fillStyle = '#5c4837';
+  bark.fillRect(0, 0, 128, 256);
+  for (let i = 0; i < 180; i++) {
+    const x = (i * 67) % 128, y = (i * 109) % 256;
+    const length = 22 + i % 52;
+    bark.strokeStyle = i % 3 ? 'rgba(28,20,15,0.48)' : 'rgba(175,142,105,0.45)';
+    bark.lineWidth = 1.2 + i % 3;
+    for (const wrap of [-256, 0, 256]) {
       bark.beginPath();
-      bark.moveTo(x,y+wrap);
-      bark.quadraticCurveTo(x+Math.sin(i)*7,y+wrap+length*.55,x+Math.cos(i)*3,y+wrap+length);
+      bark.moveTo(x, y + wrap);
+      bark.quadraticCurveTo(x + Math.sin(i) * 8, y + wrap + length * .55, x + Math.cos(i) * 4, y + wrap + length);
       bark.stroke();
     }
   }
-  for (let i = 0; i < 32; i++) {
-    bark.fillStyle = i%3 ? '#b1a58c38' : '#69805c55';
+  for (let i = 0; i < 48; i++) {
+    bark.fillStyle = i % 3 ? '#9c927b40' : '#4d634255';
     bark.beginPath();
-    bark.ellipse((i*37)%128,(i*59)%256,1+i%4,2+i%8,.08,0,Math.PI*2);
+    bark.ellipse((i * 37) % 128, (i * 59) % 256, 1.5 + i % 4, 2.5 + i % 8, .12, 0, Math.PI * 2);
     bark.fill();
   }
   const barkMap = new THREE.CanvasTexture(barkCanvas);
   barkMap.encoding = THREE.sRGBEncoding;
-  const lobes = broadleaf.flatMap(([x,y,z,s],i)=>{
-    const a=i*2.39996;
-    const dx=Math.cos(a)*s, dz=Math.sin(a)*s;
-    return [[x+dx,y+s*.4,z+dz,s*.77],[x-dz,y+s*.95,z+dx,s*.65],[x-dx,y+s*.2,z-dz,s*.88]];
+
+  const lobes = broadleaf.flatMap(([x, y, z, s], i) => {
+    const a = i * 2.39996;
+    const dx = Math.cos(a) * s * 0.8, dz = Math.sin(a) * s * 0.8;
+    return [[x + dx, y + s * .35, z + dz, s * .72], [x - dz, y + s * .85, z + dx, s * .62], [x - dx, y + s * .18, z - dz, s * .82]];
   });
-  const broadTrunk = new THREE.CylinderGeometry(.10,.20,1,10);
-  scatter(broadleaf,broadTrunk,0xcec3ae,1.85,1,3.7,true,null,'樹幹',barkMap);
-  scatter(conifers,new THREE.CylinderGeometry(.058,.155,1,9),0xaf9c83,2.42,1,4.84,true,null,'樹幹',barkMap);
-  scatter(sparseTrees,new THREE.CylinderGeometry(.066,.128,1,9),0xd5c5ab,2.28,1,4.56,true,null,'樹幹',barkMap);
-  const branchMesh=new THREE.InstancedMesh(new THREE.CylinderGeometry(.032,.092,1,6),
-    new THREE.MeshStandardMaterial({color:0xc3b79e,map:barkMap,roughness:.95}),lobes.length);
-  const branchTransform=new THREE.Object3D();
-  const up=new THREE.Vector3(0,1,0);
-  lobes.forEach(([x,y,z,s],i)=>{
-    const [tx,ty,tz,scale]=broadleaf[Math.floor(i/3)];
-    const from=new THREE.Vector3(tx,ty+scale*(2.35+i%3*.25),tz);
-    const to=new THREE.Vector3(x,y+3.65*s,z);
-    const axis=to.clone().sub(from);
-    branchTransform.position.copy(from).addScaledVector(axis,.5);
-    branchTransform.scale.set(scale,axis.length(),scale);
-    branchTransform.quaternion.setFromUnitVectors(up,axis.normalize());
+
+  // Trunks with natural root flare translated so base sits at y = 0
+  const broadTrunk = new THREE.CylinderGeometry(.12, .26, 1, 10);
+  broadTrunk.translate(0, 0.5, 0);
+  const coniferTrunk = new THREE.CylinderGeometry(.06, .20, 1, 9);
+  coniferTrunk.translate(0, 0.5, 0);
+  const sparseTrunk = new THREE.CylinderGeometry(.07, .18, 1, 9);
+  sparseTrunk.translate(0, 0.5, 0);
+
+  scatter(broadleaf, broadTrunk, 0xcec3ae, 0, 1.0, 3.8, true, null, '樹幹', barkMap, 'trunk');
+  scatter(conifers, coniferTrunk, 0xaf9c83, 0, 1.0, 5.0, true, null, '樹幹', barkMap, 'trunk');
+  scatter(sparseTrees, sparseTrunk, 0xd5c5ab, 0, 1.0, 4.4, true, null, '樹幹', barkMap, 'trunk');
+
+  const branchMat = new THREE.MeshStandardMaterial({ color: 0xb5a78e, map: barkMap, roughness: .95 });
+  applyTreeWindShader(branchMat, false);
+  const branchMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(.032, .092, 1, 6), branchMat, lobes.length);
+  const branchTransform = new THREE.Object3D();
+  const up = new THREE.Vector3(0, 1, 0);
+  lobes.forEach(([x, y, z, s], i) => {
+    const [tx, ty, tz, scale] = broadleaf[Math.floor(i / 3)];
+    const from = new THREE.Vector3(tx, ty + scale * (2.35 + i % 3 * .25), tz);
+    const to = new THREE.Vector3(x, y + 3.65 * s, z);
+    const axis = to.clone().sub(from);
+    branchTransform.position.copy(from).addScaledVector(axis, .5);
+    branchTransform.scale.set(scale, axis.length(), scale);
+    branchTransform.quaternion.setFromUnitVectors(up, axis.normalize());
     branchTransform.updateMatrix();
-    branchMesh.setMatrixAt(i,branchTransform.matrix);
+    branchMesh.setMatrixAt(i, branchTransform.matrix);
   });
-  branchMesh.frustumCulled=false;
-  branchMesh.castShadow=true;
+  branchMesh.frustumCulled = false;
+  branchMesh.castShadow = true;
+  const branchDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  applyTreeWindShader(branchDepth, false);
+  branchMesh.customDepthMaterial = branchDepth;
   group.add(branchMesh);
 
-  const leafCanvas=document.createElement('canvas');
-  leafCanvas.width=leafCanvas.height=256;
-  const leaves=leafCanvas.getContext('2d');
-  for(let i=0;i<620;i++) {
-    const angle=i*2.39996, radius=Math.sqrt(random());
-    const x=128+Math.cos(angle)*radius*113, y=128+Math.sin(angle)*radius*99;
-    if (radius>.78 && Math.sin(angle*7+radius*9)>.36) continue;
-    const color=35+Math.floor(random()*32);
-    leaves.fillStyle=`hsl(${83+random()*29} 36% ${color}%)`;
+  // Dense, crisp ovate leaf canvas texture
+  const leafCanvas = document.createElement('canvas');
+  leafCanvas.width = leafCanvas.height = 256;
+  const leaves = leafCanvas.getContext('2d');
+  for (let i = 0; i < 750; i++) {
+    const angle = i * 2.39996, radius = Math.sqrt(random());
+    const x = 128 + Math.cos(angle) * radius * 116, y = 128 + Math.sin(angle) * radius * 102;
+    if (radius > .84 && Math.sin(angle * 7 + radius * 9) > .28) continue;
+    const tone = 30 + Math.floor(random() * 34);
+    const hue = 86 + random() * 26;
+    leaves.fillStyle = `hsl(${hue} 38% ${tone}%)`;
     leaves.beginPath();
-    leaves.ellipse(x,y,3+random()*6,1.4+random()*3,angle,0,Math.PI*2);
+    leaves.ellipse(x, y, 3.5 + random() * 5.5, 1.8 + random() * 3.2, angle + random() * 0.4, 0, Math.PI * 2);
     leaves.fill();
+    if (i % 3 === 0) {
+      leaves.strokeStyle = `hsl(${hue + 4} 42% ${tone + 14}%)`;
+      leaves.lineWidth = 1;
+      leaves.beginPath();
+      leaves.moveTo(x - 2, y - 1);
+      leaves.lineTo(x + 2, y + 1);
+      leaves.stroke();
+    }
   }
-  const leafMap=new THREE.CanvasTexture(leafCanvas);
-  leafMap.encoding=THREE.sRGBEncoding;
-  scatter(broadleaf,new THREE.PlaneGeometry(1,1).rotateX(.61),0xe0efca,4.25,4.6,3.8,true,leafMap,'樹冠');
-  const airyCrowns = sparseTrees.flatMap(([x,y,z,s],i) => {
-    const a = i*2.39996;
-    return [[x,y+s*2.65,z,s*.53],[x+Math.cos(a)*.75*s,y+s*2.08,z+Math.sin(a)*.75*s,s*.47],
-      [x-Math.cos(a)*.63*s,y+s*1.63,z-Math.sin(a)*.63*s,s*.42]];
-  });
-  scatter(airyCrowns,new THREE.PlaneGeometry(1,1).rotateX(.50),0xc0cf9b,3.5,4.0,2.7,true,leafMap,'疏葉樹冠');
-  scatter(airyCrowns,new THREE.PlaneGeometry(1,1).rotateX(-.72),0xb3bf8a,3.5,3.7,2.5,false,leafMap);
+  const leafMap = new THREE.CanvasTexture(leafCanvas);
+  leafMap.encoding = THREE.sRGBEncoding;
 
+  // Alpine needle canvas texture
   const needleCanvas = document.createElement('canvas');
   needleCanvas.width = needleCanvas.height = 256;
   const needles = needleCanvas.getContext('2d');
-  for (let tier = 0; tier < 14; tier++) {
-    const y = 34+tier*13;
-    const extent = 13+tier*6.2;
-    for (const side of [-1,1]) {
-      for (let j = 0; j < 15; j++) {
-        const reach = extent*(.40+j/24);
-        needles.strokeStyle = ['#435332','#5e7042','#7e9056'][j%3];
-        needles.lineWidth = 1.5+j%3;
+  for (let tier = 0; tier < 16; tier++) {
+    const y = 28 + tier * 12.5;
+    const extent = 15 + tier * 6.5;
+    for (const side of [-1, 1]) {
+      for (let j = 0; j < 18; j++) {
+        const reach = extent * (.38 + j / 26);
+        needles.strokeStyle = ['#2a3a1f', '#3a4f2c', '#546d3d', '#6f8a50'][j % 4];
+        needles.lineWidth = 1.6 + j % 3;
         needles.beginPath();
-        needles.moveTo(128+side*j*.85,y-3);
-        needles.quadraticCurveTo(128+side*reach*.64,y+7,128+side*reach,y+19+Math.sin(j)*8);
+        needles.moveTo(128 + side * j * .82, y - 4);
+        needles.quadraticCurveTo(128 + side * reach * .62, y + 6, 128 + side * reach, y + 18 + Math.sin(j) * 7);
         needles.stroke();
       }
     }
   }
   const needleMap = new THREE.CanvasTexture(needleCanvas);
   needleMap.encoding = THREE.sRGBEncoding;
-  scatter(conifers,new THREE.PlaneGeometry(1,1).rotateX(.10),0xc9d3b0,3.28,3.55,5.15,true,needleMap,'針葉樹冠');
-  scatter(conifers,new THREE.PlaneGeometry(1,1).rotateX(-.13),0xa9ba91,3.28,3.48,5.08,false,needleMap);
-  scatter(lobes,new THREE.PlaneGeometry(1,1).rotateX(.24),0xffffff,3.65,4.5,3.25,false,leafMap,'樹冠');
-  scatter(lobes,new THREE.PlaneGeometry(1,1).rotateX(-.55),0xe6f2ce,3.9,4.2,3.1,false,leafMap);
-  function roundedLandform(frequency, variation) {
-    const geometry = new THREE.SphereGeometry(1, 12, 8);
-    const vertices = geometry.attributes.position;
-    for (let i = 0; i < vertices.count; i++) {
-      const x = vertices.getX(i), y = vertices.getY(i), z = vertices.getZ(i);
-      const ripple = 1 + variation * Math.sin(frequency * x + 2 * y) * Math.cos(frequency * z - y);
-      vertices.setXYZ(i,x*ripple,y*ripple,z*ripple);
-    }
-    geometry.computeVertexNormals();
-    return geometry;
-  }
-  function clearOfCanopy(x,z,margin) {
-    return !trees.some(([tx,,tz,treeScale]) => {
-      const radius = 3.7*treeScale + margin;
-      return (x-tx)**2 + (z-tz)**2 < radius**2;
+
+  // 3D Volumetric Canopies with Wind Sway
+  const broadCanopyGeo = createVolumetricCanopyGeometry();
+  const coniferCanopyGeo = createConiferFoliageGeometry();
+  const shrubGeo = createShrubFoliageGeometry();
+
+  scatter(broadleaf, broadCanopyGeo, 0xd8e8bf, 3.2, 4.4, 3.9, true, leafMap, '樹冠', null, 'canopy');
+  scatter(lobes, broadCanopyGeo, 0xe4f0cb, 3.4, 3.1, 2.7, false, leafMap, '樹冠', null, 'canopy');
+  scatter(conifers, coniferCanopyGeo, 0xc2d1a8, 1.6, 3.8, 5.2, true, needleMap, '針葉樹冠', null, 'canopy');
+  scatter(sparseTrees, broadCanopyGeo, 0xbfcda0, 2.8, 3.6, 3.2, true, leafMap, '疏葉樹冠', null, 'canopy');
+
+  // Realistic Weathered Mountain Boulders & Leafy Shrubs (Cleaned up giant round stones!)
+  function clearOfCanopy(x, z, margin) {
+    return !trees.some(([tx, , tz, treeScale]) => {
+      const radius = 3.7 * treeScale + margin;
+      return (x - tx) ** 2 + (z - tz) ** 2 < radius ** 2;
     });
   }
-  const groundStones = stones.filter(([x,,z,scale]) => clearOfCanopy(x,z,.65*scale));
-  const rock = roundedLandform(4,.16);
+  const groundStones = stones.filter(([x, , z, scale]) => clearOfCanopy(x, z, .65 * scale));
+  const rock = createWeatheredBoulderGeometry();
   rock.computeBoundingBox();
-  const rockBase = -rock.boundingBox.min.y * .38;
+  const rockBase = -rock.boundingBox.min.y * 0.55;
   for (const stone of groundStones) {
-    const [x,,z,scale] = stone;
-    const edge = .5 * scale;
+    const [x, , z, scale] = stone;
+    const edge = 0.5 * scale;
     stone[1] = Math.min(
-      wildernessMeshHeight(x,z),wildernessMeshHeight(x-edge,z),wildernessMeshHeight(x+edge,z),
-      wildernessMeshHeight(x,z-edge),wildernessMeshHeight(x,z+edge)
-    ) + (rockBase-.10)*scale;
+      wildernessMeshHeight(x, z), wildernessMeshHeight(x - edge, z), wildernessMeshHeight(x + edge, z),
+      wildernessMeshHeight(x, z - edge), wildernessMeshHeight(x, z + edge)
+    ) + (rockBase - 0.12) * scale;
   }
-  scatter(groundStones,rock,0x8e8974,0,.65,.38,false,null,'岩石');
-  scatter(shrubs,roundedLandform(7,.19),0x75844b,.40,.70,.47,false,null,'灌木');
-  scatter(lobes,new THREE.PlaneGeometry(1,1).rotateX(.92),0xb7c992,3.68,3.8,3.24,false,leafMap);
+  scatter(groundStones, rock, 0x5e584c, 0, 0.95, 0.58, true, null, '岩石');
+  scatter(shrubs, shrubGeo, 0x768f56, 0.2, 1.4, 0.9, false, leafMap, '灌木', null, 'canopy');
 
-  yield '配置野草、灌木與路肩碎石';
-  const scrub = [];
-  for (const [x,,z,scale] of shrubs) {
-    for (let i = 0; i < 3; i++) {
-      const angle = i * 2.39996 + x * .06;
-      const px = x + Math.cos(angle)*.43*scale, pz = z + Math.sin(angle)*.43*scale;
-      scrub.push([px,wildernessMeshHeight(px,pz),pz,scale*(.64+i*.09)]);
-    }
-  }
-  scatter(scrub,roundedLandform(8,.19),0x869650,.32,.49,.41);
+  yield '配置野草與路肩碎石';
 
   const grass = new THREE.BufferGeometry();
   const blades = [];
@@ -4914,75 +6371,153 @@ function* buildWildernessLandscape(group) {
 }
 
 function dressWildernessSites(group) {
-  const concrete = new THREE.MeshStandardMaterial({color:0x87877b,roughness:.95});
-  const dark = new THREE.MeshStandardMaterial({color:0x454b43,roughness:.9});
-  const steel = new THREE.MeshStandardMaterial({color:0x777e72,roughness:.72});
-  const green = new THREE.MeshStandardMaterial({color:0x606d55,roughness:.86});
-  function box(material,x,y,z,w,h,d) {
-    const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
-    mesh.position.set(x,y,z);
-    mesh.castShadow=true;
-    mesh.receiveShadow=true;
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x828378, roughness: 0.94 });
+  const darkConcrete = new THREE.MeshStandardMaterial({ color: 0x585a52, roughness: 0.96 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x353b34, roughness: 0.88 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x676f64, roughness: 0.64, metalness: 0.38 });
+  const gabion = new THREE.MeshStandardMaterial({ color: 0x86775c, roughness: 0.97 });
+  const bermEarth = new THREE.MeshStandardMaterial({ color: 0x586641, roughness: 0.98 });
+  const bermSoil = new THREE.MeshStandardMaterial({ color: 0x6b5b43, roughness: 0.98 });
+  const hazardMat = createHazardStripeMaterial();
+  const c2Camo = createMilitaryCamoTexture('#3f4f38', '#62523d', '#252a23', 'C2-LINK 04');
+  const c2Mat = new THREE.MeshStandardMaterial({ map: c2Camo.tex, roughness: 0.82, metalness: 0.18 });
+  const beaconRed = new THREE.MeshStandardMaterial({
+    color: 0xff2626,
+    emissive: 0xff1111,
+    emissiveIntensity: 1.25
+  });
+
+  function box(material, x, y, z, w, h, d, rotY = 0) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+    mesh.position.set(x, y, z);
+    if (rotY) mesh.rotation.y = rotY;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     group.add(mesh);
-    if (h >= 1.3 || y > 2.5 && w > 4 && d > 3) {
+    if (h >= 1.2 || (y > 2.0 && w > 3.5 && d > 2.5)) {
+      const halfW = Math.abs(w * Math.cos(rotY)) * 0.5 + Math.abs(d * Math.sin(rotY)) * 0.5;
+      const halfD = Math.abs(w * Math.sin(rotY)) * 0.5 + Math.abs(d * Math.cos(rotY)) * 0.5;
       wildernessColliders.push({
-        minX:x-w/2, maxX:x+w/2, minY:y-h/2, maxY:y+h/2,
-        minZ:z-d/2, maxZ:z+d/2, label:'野外設施'
+        minX: x - halfW, maxX: x + halfW, minY: y - h / 2, maxY: y + h / 2,
+        minZ: z - halfD, maxZ: z + halfD, label: '軍事陣地設施'
       });
     }
+    return mesh;
   }
-  for (const {x,z,radius,height} of wildernessSites.slice(1)) {
-    box(concrete,x,height-.08,z,radius*1.48,.26,radius*1.40);
-    for (const side of [-1,1]) {
-      const hasEntrance = z===0 && side===1;
-      for (let n=-2;n<=2;n++) {
-        if (hasEntrance && n===0) continue;
-        box(steel,x+side*radius*.77,height+.95,z+n*radius*.29,.12,1.9,.12);
-      }
-      for (const y of [.5,1.62]) {
-        if (hasEntrance) {
-          for (const end of [-1,1]) box(steel,x+side*radius*.77,height+y,z+end*radius*.44,.10,.10,radius*.39);
-        } else {
-          box(steel,x+side*radius*.77,height+y,z,.10,.10,radius*1.27);
-        }
-      }
+
+  // =========================================================================
+  // SITE A: High-Mountain Crest Air-Defense Radar Station (`wildernessRadarSite`)
+  // =========================================================================
+  const { x: radarX, z: radarZ, radius: radarR, height: radarH } = wildernessRadarSite;
+  // 1. Terraced Reinforced Concrete Summit Bastion & Retaining Base
+  box(darkConcrete, radarX, radarH - 0.58, radarZ, radarR * 1.62, 1.05, radarR * 1.54);
+  box(concrete, radarX, radarH - 0.06, radarZ, radarR * 1.48, 0.24, radarR * 1.40);
+
+  // 2. Perimeter HESCO Earth-Filled Defensive Gabion Bastions around the Summit Crest
+  for (let i = -4; i <= 4; i++) {
+    // North crest wall
+    const nx = radarX + i * 2.15, nz = radarZ - 8.8;
+    box(gabion, nx, radarH + 0.68, nz, 1.95, 1.36, 1.32);
+    box(bermSoil, nx, radarH + 1.38, nz, 1.78, 0.08, 1.16);
+    // West cliff-side wall
+    const wx = radarX - 9.4, wz = radarZ + i * 1.95;
+    box(gabion, wx, radarH + 0.68, wz, 1.32, 1.36, 1.82);
+    box(bermSoil, wx, radarH + 1.38, wz, 1.16, 0.08, 1.66);
+  }
+  // East & South HESCO flanks (leaving Southeast tactical road entrance open)
+  for (let i = -4; i <= 1; i++) {
+    const ex = radarX + 9.4, ez = radarZ + i * 1.95;
+    box(gabion, ex, radarH + 0.68, ez, 1.32, 1.36, 1.82);
+  }
+  for (let i = -4; i <= 0; i++) {
+    const sx = radarX + i * 2.15, sz = radarZ + 8.6;
+    box(gabion, sx, radarH + 0.68, sz, 1.95, 1.36, 1.32);
+  }
+
+  // 3. Camouflaged C2 Command & Control Shelter, Diesel Generator & Telecom Mast
+  const c2X = radarX - 5.6, c2Z = radarZ - 5.2;
+  box(darkConcrete, c2X, radarH + 0.28, c2Z, 6.2, 0.56, 4.2);
+  box(c2Mat, c2X, radarH + 1.56, c2Z, 5.6, 2.15, 3.6);
+  box(dark, c2X, radarH + 2.72, c2Z, 5.85, 0.20, 3.85);
+  // Rooftop HVAC units & Microwave Data-Link Dish aimed at valley
+  box(steel, c2X - 1.4, radarH + 3.05, c2Z, 1.25, 0.48, 1.15);
+  box(steel, c2X + 1.2, radarH + 3.02, c2Z - 0.4, 0.95, 0.42, 0.95);
+  // Above-ground armored waveguide & power cable bridge from C2 shelter to Radar
+  box(dark, radarX - 2.6, radarH + 0.42, radarZ - 2.4, 3.8, 0.22, 0.45, 0.68);
+  // Auxiliary Diesel Generator Trailer on East side of summit
+  box(c2Mat, radarX + 5.8, radarH + 0.95, radarZ - 4.8, 2.8, 1.65, 1.85);
+  box(dark, radarX + 5.8, radarH + 1.84, radarZ - 4.8, 2.95, 0.14, 1.98);
+  // Tall Tactical VHF/UHF Whip Antenna Mast & Red Aviation Obstruction Light
+  const mastMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.11, 5.8, 10), steel);
+  mastMesh.position.set(c2X - 2.2, radarH + 5.4, c2Z - 1.2);
+  group.add(mastMesh);
+  const mastLight = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), beaconRed);
+  mastLight.position.set(c2X - 2.2, radarH + 8.35, c2Z - 1.2);
+  group.add(mastLight);
+
+  // Summit Entrance Hazard Bollards
+  for (const offset of [0, 1.4, 2.8]) {
+    const bx = radarX + 3.2 + offset;
+    const bz = radarZ + 8.4;
+    box(dark, bx, radarH + 0.42, bz, 0.20, 0.84, 0.20);
+    box(hazardMat, bx, radarH + 0.74, bz, 0.22, 0.22, 0.22);
+  }
+
+  // =========================================================================
+  // SITE B: Reverse-Slope Foothill Defilade Ammunition Depot (`wildernessDepotSite`)
+  // =========================================================================
+  const { x: depotX, z: depotZ, height: depotH } = wildernessDepotSite;
+  // 1. Hardened Concrete Bunker Pad & South Logistics Loading Apron (connecting to supply road)
+  box(concrete, depotX, depotH - 0.06, depotZ, 16.5, 0.24, 14.5);
+  box(darkConcrete, depotX, depotH - 0.03, depotZ + 8.2, 11.5, 0.20, 6.8); // South truck apron
+  for (const lx of [depotX - 3.4, depotX + 3.4]) {
+    box(hazardMat, lx, depotH + 0.09, depotZ + 8.2, 0.16, 0.04, 5.4);
+  }
+
+  // 2. Three-Sided U-Shaped Earthen Blast Berm / Revetment (馬蹄形防爆土堤與內側 HESCO 防爆牆)
+  // North/Rear Berm (shielding rear of bunker at z = depotZ - 6.6)
+  box(bermEarth, depotX, depotH + 1.35, depotZ - 6.8, 18.8, 2.85, 3.6);
+  box(bermSoil, depotX, depotH + 2.82, depotZ - 6.8, 16.4, 0.22, 1.8);
+  // West Berm (x = depotX - 8.4) & East Berm (x = depotX + 8.4) backed into the eastern foothill
+  for (const side of [-1, 1]) {
+    const bx = depotX + side * 8.4;
+    box(bermEarth, bx, depotH + 1.32, depotZ - 0.2, 3.4, 2.75, 14.2);
+    box(bermSoil, bx, depotH + 2.74, depotZ - 0.2, 1.7, 0.20, 12.4);
+    // Inner HESCO gabion blast wall lining the earthen berm
+    for (let k = -3; k <= 2; k++) {
+      box(gabion, depotX + side * 6.2, depotH + 0.78, depotZ + k * 1.85, 1.28, 1.56, 1.72);
     }
   }
-  const { x: radarX, z: radarZ, height: radarHeight } = wildernessRadarSite;
-  box(concrete,radarX-5,radarHeight+.4,radarZ-6,6,1.4,4);
-  box(green,radarX-5,radarHeight+1.7,radarZ-6,5.5,1.4,3.5);
-  box(steel,radarX-5,radarHeight+2.5,radarZ-6,5.9,.25,3.9);
-  box(concrete,30,2.56,-245,8,.18,7);
-  // Low loading apron in front of the depot.
-  box(concrete,25,2.57,-244.4,7.1,.18,4.2);
-  for (const x of [22.3,27.7]) {
-    box(steel,x,2.68,-244.4,.09,.04,3.7);
+  for (let k = -3; k <= 3; k++) {
+    box(gabion, depotX + k * 1.85, depotH + 0.78, depotZ - 4.7, 1.72, 1.56, 1.28);
   }
-  const gabion = new THREE.MeshStandardMaterial({color:0x716650,roughness:.98});
-  for (const {x,z,height} of wildernessSites.slice(1)) {
-    for (const side of [-1,1]) {
-      for (let i = 0; i < 4; i++) {
-        const px = x + side * (5.5 + i * 1.55);
-        const pz = z - 5.6;
-        const base = Math.max(height, wildernessHeight(px,pz));
-        box(gabion,px,base+.68,pz,1.48,1.36,1.24);
-        box(steel,px,base+1.39,pz,1.51,.08,1.27);
-      }
-    }
+
+  // 3. Dual Tall Lightning Arrestor Masts (雙座防雷避雷針高塔 — 標準彈藥庫防靜電設施)
+  for (const side of [-1, 1]) {
+    const lx = depotX + side * 7.6;
+    const lz = depotZ - 6.2;
+    box(darkConcrete, lx, depotH + 3.1, lz, 0.65, 0.65, 0.65);
+    const rodMast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.14, 6.4, 8), steel);
+    rodMast.position.set(lx, depotH + 6.3, lz);
+    rodMast.castShadow = true;
+    group.add(rodMast);
+    const finial = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.65, 8), steel);
+    finial.position.set(lx, depotH + 9.75, lz);
+    group.add(finial);
+    const warnBulb = new THREE.Mesh(new THREE.SphereGeometry(0.10, 8, 8), beaconRed);
+    warnBulb.position.set(lx, depotH + 9.25, lz);
+    group.add(warnBulb);
   }
-  const caution = new THREE.MeshStandardMaterial({ color: 0x81734e, roughness: .9 });
-  for (const [x, z] of [[radarX - 5, radarZ - 6], [30, -245]]) {
-    for (const offset of [0, 1.1, 2.2]) {
-      const px = x + 2.7 + offset;
-      const pz = z + 4.4;
-      const ground = wildernessHeight(px, pz);
-      box(dark, px, ground + .39, pz, .17, .78, .17);
-      box(caution, px, ground + .70, pz, .19, .12, .19);
-    }
-  }
-  box(green,32.3,3.49,-245,1.65,1.75,3.0);
-  box(dark,32.3,4.41,-245,1.86,.14,3.16);
-  for (let i=0;i<4;i++) box(dark,27+i*1.65,2.67,-242,.88,.07,.16);
+
+  // 4. Security Guardhouse, Inspection Gate & Ready-Ammo Revetment Bay at South Entrance
+  box(c2Mat, depotX - 5.8, depotH + 1.15, depotZ + 8.6, 2.4, 2.3, 2.4);
+  box(dark, depotX - 5.8, depotH + 2.38, depotZ + 8.6, 2.65, 0.18, 2.65);
+  // Drop-arm security barrier gate across entrance apron
+  box(hazardMat, depotX - 4.1, depotH + 0.65, depotZ + 9.2, 0.28, 1.15, 0.28);
+  box(hazardMat, depotX - 1.2, depotH + 0.98, depotZ + 9.2, 5.4, 0.11, 0.11);
+  // Secondary HESCO Ready-Ammo Bay on East side of apron
+  box(gabion, depotX + 6.4, depotH + 0.68, depotZ + 7.8, 3.2, 1.36, 0.95);
+  box(gabion, depotX + 7.8, depotH + 0.68, depotZ + 9.2, 0.95, 1.36, 3.2);
 }
 
 
@@ -5057,16 +6592,24 @@ function* buildWildernessBattlefield() {
     turret: tankA.turretGroup,
     armorMat: tankA.armorMat,
     rollWheels: tankA.rollWheels,
+    tankParts: tankA,
+    turretRingWell: tankA.turretRingWell,
+    engineBreachWell: tankA.engineBreachWell,
+    damageGroup: tankA.damageGroup,
     thermal: buildTankThermalSignature(tankA.root,plumeMap),
     pos: tankA.root.position,
     radius: 4.2,
     hp: 100,
     maxHp: 100,
     destroyed: false,
+    cookOff: false,
+    hitCount: 0,
     patrolMinX: -65,
     patrolMaxX: 65,
     patrolDir: 1,
-    patrolSpeed: 7.2
+    patrolSpeed: 7.2,
+    baseSpeed: 7.2,
+    trackDamaged: false
   };
   tacticalState.targets.push(targetTankA);
   tacticalState.tanks.push(targetTankA);
@@ -5086,16 +6629,24 @@ function* buildWildernessBattlefield() {
     turret: tankB.turretGroup,
     armorMat: tankB.armorMat,
     rollWheels: tankB.rollWheels,
+    tankParts: tankB,
+    turretRingWell: tankB.turretRingWell,
+    engineBreachWell: tankB.engineBreachWell,
+    damageGroup: tankB.damageGroup,
     thermal: buildTankThermalSignature(tankB.root,plumeMap),
     pos: tankB.root.position,
     radius: 4.2,
     hp: 100,
     maxHp: 100,
     destroyed: false,
+    cookOff: false,
+    hitCount: 0,
     patrolMinX: 55,
     patrolMaxX: 135,
     patrolDir: -1,
-    patrolSpeed: 6.5
+    patrolSpeed: 6.5,
+    baseSpeed: 6.5,
+    trackDamaged: false
   };
   tacticalState.targets.push(targetTankB);
   tacticalState.tanks.push(targetTankB);
@@ -5112,6 +6663,9 @@ function* buildWildernessBattlefield() {
     name: '前線防空引導雷達',
     mesh: radar.root,
     dish: radar.dishGroup,
+    armorMat: radar.cabinetMat,
+    radarParts: radar,
+    thermal: buildRadarThermalSignature(radar.root, plumeMap),
     pos: radar.root.position,
     radius: 4.5,
     hp: 80,
@@ -5119,10 +6673,12 @@ function* buildWildernessBattlefield() {
     destroyed: false
   };
   tacticalState.targets.push(targetRadar);
+  updateRadarThermalSignature(targetRadar, 0);
 
   // Target 4: 前線彈藥庫
   const ammoDepot = createAmmoDepotMesh(true);
-  ammoDepot.position.set(25, 2.56, -250);
+  ammoDepot.position.set(wildernessDepotSite.x, wildernessDepotSite.height + .06, wildernessDepotSite.z);
+  ammoDepot.rotation.y = Math.PI; // Open bunker portal & hazard signage face South (+Z) toward approach road
   wildernessGroup.add(ammoDepot);
   const targetAmmo = {
     id: 'ammo_depot',
@@ -5130,7 +6686,7 @@ function* buildWildernessBattlefield() {
     name: '前線高爆彈藥庫',
     mesh: ammoDepot,
     pos: ammoDepot.position,
-    radius: 5.0,
+    radius: 5.2,
     hp: 60,
     maxHp: 60,
     destroyed: false
@@ -5140,6 +6696,7 @@ function* buildWildernessBattlefield() {
   yield '建立戰場碰撞索引';
   indexWildernessColliders();
   scene.add(wildernessGroup);
+  applyTimeOfDay(state.timeOfDay);
 }
 
 function buildDroneBellyPayload() {
@@ -5147,14 +6704,24 @@ function buildDroneBellyPayload() {
   dronePayloadGroup = new THREE.Group();
   bellyBombMeshes = [];
 
-  const bracket = new THREE.BoxGeometry(.16, .16, .36);
-  const bracketMaterial = new THREE.MeshStandardMaterial({ color: 0x353d34, roughness: .78 });
+  const bracket = new THREE.BoxGeometry(.14, .10, .44);
+  const bracketMaterial = new THREE.MeshStandardMaterial({ color: 0x272e29, roughness: .7, metalness: .4 });
+  const latchMaterial = new THREE.MeshStandardMaterial({ color: 0x8a9388, roughness: .35, metalness: .85 });
+  const clampGeo = new THREE.CylinderGeometry(.02, .02, .08, 8);
+
   for (const side of [-1, 1]) {
-    const x = side * .31;
-    vehiclePart(dronePayloadGroup, bracket, bracketMaterial, x, -.32, .15);
+    const x = side * .29;
+    // Aerodynamic mounting pylon bracket under belly
+    vehiclePart(dronePayloadGroup, bracket, bracketMaterial, x, -.30, .12);
+    // Mechanical servo latch & quick-release pin details
+    vehiclePart(dronePayloadGroup, clampGeo, latchMaterial, x, -.35, -.02);
+    vehiclePart(dronePayloadGroup, clampGeo, latchMaterial, x, -.35, .26);
+
     const bomb = createBombMesh();
-    bomb.position.set(x, -.47, .15);
-    bomb.scale.setScalar(.65);
+    // Horizontally slung under belly with a subtle 5.5 deg forward-downward rake
+    bomb.position.set(x, -.42, .12);
+    bomb.rotation.set(-0.095, 0, 0); // nose (-Z) forward and slightly tilted downward
+    bomb.scale.setScalar(.68);
     dronePayloadGroup.add(bomb);
     bellyBombMeshes.push(bomb);
   }
@@ -5170,6 +6737,35 @@ function updateDroneBellyBombs() {
 
   bellyBombMeshes[0].visible = tacticalState.bombsRemaining >= 1;
   bellyBombMeshes[1].visible = tacticalState.bombsRemaining >= 2;
+}
+
+function computeWindShearMultiplier(agl) {
+  const h = Math.max(1.5, agl);
+  return THREE.MathUtils.clamp(Math.pow(h / 18.0, 0.16), 0.68, 1.38);
+}
+
+function computeGroundEffectFactor(agl) {
+  if (agl >= 3.4) return 1.0;
+  const zRatio = 1.85 / (4.0 * Math.max(0.55, agl));
+  return THREE.MathUtils.clamp(1.0 / (1.0 - zRatio * zRatio), 1.0, 1.28);
+}
+
+function sampleCanopyBallisticDrag(px, py, pz) {
+  if (!wildernessColliderCells.size) return 1.0;
+  const cellX = wildernessColliderCell(px);
+  const cellZ = wildernessColliderCell(pz);
+  const candidates = wildernessColliderCells.get(`${cellX},${cellZ}`);
+  if (!candidates) return 1.0;
+  let mult = 1.0;
+  for (let i = 0; i < candidates.length; i++) {
+    const box = wildernessColliders[candidates[i]];
+    if (!box || !box.label || !box.label.includes('樹冠')) continue;
+    if (px >= box.minX && px <= box.maxX && py >= box.minY && py <= box.maxY && pz >= box.minZ && pz <= box.maxZ) {
+      const density = box.label === '針葉樹冠' ? 3.8 : (box.label === '疏葉樹冠' ? 2.4 : 3.2);
+      if (density > mult) mult = density;
+    }
+  }
+  return mult;
 }
 
 function getBombAtmosphere() {
@@ -5190,41 +6786,150 @@ function nextBombMount() {
   return bellyBombMeshes[Math.max(0, tacticalState.bombsRemaining - 1)];
 }
 
+function computeBombReleaseVelocity(spawnPos) {
+  const bodyDown = new THREE.Vector3(0, -0.9, 0).applyEuler(
+    new THREE.Euler(drone.pitch, drone.yaw, drone.roll, 'YXZ')
+  );
+  const rX = spawnPos.x - drone.pos.x;
+  const rY = spawnPos.y - drone.pos.y;
+  const rZ = spawnPos.z - drone.pos.z;
+  const wx = drone.pitchRate || 0;
+  const wy = drone.yawRate || 0;
+  const wz = drone.rollRate || 0;
+  const tangX = wy * rZ - wz * rY;
+  const tangY = wz * rX - wx * rZ;
+  const tangZ = wx * rY - wy * rX;
+
+  return {
+    vx: drone.vel.x + bodyDown.x + tangX * 0.45,
+    vy: drone.vel.y + bodyDown.y + tangY * 0.45,
+    vz: drone.vel.z + bodyDown.z + tangZ * 0.45
+  };
+}
+
+function evaluateBombAccel(px, py, pz, vx, vy, vz, tSec, env, includeTurbulence, outAcc) {
+  const ground = wildernessHeight(px, pz);
+  const agl = Math.max(0.5, py - ground);
+  const shear = computeWindShearMultiplier(agl);
+  const wx = env.wx * shear;
+  const wy = env.wy;
+  const wz = env.wz * shear;
+
+  const vrx = vx - wx;
+  const vry = vy - wy;
+  const vrz = vz - wz;
+  const vrel = Math.hypot(vrx, vry, vrz);
+
+  const rhoFactor = Math.exp(-Math.max(0, py) / 8500.0);
+  const finAlignDrag = vrel < 12.0 ? (1.16 - 0.015 * vrel) : (0.98 + 0.0018 * Math.min(45.0, vrel - 12.0));
+  const canopyMult = sampleCanopyBallisticDrag(px, py, pz);
+  const kDrag = env.dragCoeff * rhoFactor * finAlignDrag * canopyMult;
+
+  const magnusCoeff = 0.00045 * rhoFactor;
+  const magX = -vrz * magnusCoeff * vrel;
+  const magZ = vrx * magnusCoeff * vrel;
+
+  let turbX = 0;
+  let turbZ = 0;
+  if (includeTurbulence && env.turbulence > 0) {
+    turbX = Math.sin(tSec * 9.7) * env.turbulence * 0.22;
+    turbZ = Math.cos(tSec * 8.3) * env.turbulence * 0.22;
+  }
+
+  outAcc.ax = -kDrag * vrel * vrx + magX + turbX;
+  outAcc.ay = -9.80665 - kDrag * vrel * vry;
+  outAcc.az = -kDrag * vrel * vrz + magZ + turbZ;
+}
+
+const _rkAcc1 = { ax: 0, ay: 0, az: 0 };
+const _rkAcc2 = { ax: 0, ay: 0, az: 0 };
+const _rkAcc3 = { ax: 0, ay: 0, az: 0 };
+const _rkAcc4 = { ax: 0, ay: 0, az: 0 };
+
+function stepBombRK4(stateVec, dt, tSec, env, includeTurbulence) {
+  const { px, py, pz, vx, vy, vz } = stateVec;
+  const halfDt = dt * 0.5;
+
+  evaluateBombAccel(px, py, pz, vx, vy, vz, tSec, env, includeTurbulence, _rkAcc1);
+
+  const px2 = px + vx * halfDt;
+  const py2 = py + vy * halfDt;
+  const pz2 = pz + vz * halfDt;
+  const vx2 = vx + _rkAcc1.ax * halfDt;
+  const vy2 = vy + _rkAcc1.ay * halfDt;
+  const vz2 = vz + _rkAcc1.az * halfDt;
+  evaluateBombAccel(px2, py2, pz2, vx2, vy2, vz2, tSec + halfDt, env, includeTurbulence, _rkAcc2);
+
+  const px3 = px + vx2 * halfDt;
+  const py3 = py + vy2 * halfDt;
+  const pz3 = pz + vz2 * halfDt;
+  const vx3 = vx + _rkAcc2.ax * halfDt;
+  const vy3 = vy + _rkAcc2.ay * halfDt;
+  const vz3 = vz + _rkAcc2.az * halfDt;
+  evaluateBombAccel(px3, py3, pz3, vx3, vy3, vz3, tSec + halfDt, env, includeTurbulence, _rkAcc3);
+
+  const px4 = px + vx3 * dt;
+  const py4 = py + vy3 * dt;
+  const pz4 = pz + vz3 * dt;
+  const vx4 = vx + _rkAcc3.ax * dt;
+  const vy4 = vy + _rkAcc3.ay * dt;
+  const vz4 = vz + _rkAcc3.az * dt;
+  evaluateBombAccel(px4, py4, pz4, vx4, vy4, vz4, tSec + dt, env, includeTurbulence, _rkAcc4);
+
+  const dt6 = dt / 6.0;
+  stateVec.px = px + dt6 * (vx + 2.0 * (vx2 + vx3) + vx4);
+  stateVec.py = py + dt6 * (vy + 2.0 * (vy2 + vy3) + vy4);
+  stateVec.pz = pz + dt6 * (vz + 2.0 * (vz2 + vz3) + vz4);
+  stateVec.vx = vx + dt6 * (_rkAcc1.ax + 2.0 * (_rkAcc2.ax + _rkAcc3.ax) + _rkAcc4.ax);
+  stateVec.vy = vy + dt6 * (_rkAcc1.ay + 2.0 * (_rkAcc2.ay + _rkAcc3.ay) + _rkAcc4.ay);
+  stateVec.vz = vz + dt6 * (_rkAcc1.az + 2.0 * (_rkAcc2.az + _rkAcc3.az) + _rkAcc4.az);
+}
+
+const _ccipSimState = { px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0 };
+
 function calculateImpactPoint() {
   const env = getBombAtmosphere();
-  const stepDt = 0.04;
+  const stepDt = 0.035;
   const release = nextBombMount().getWorldPosition(new THREE.Vector3());
-  let { x: px, y: py, z: pz } = release;
-  let vx = drone.vel.x;
-  let vy = drone.vel.y - 1.2;
-  let vz = drone.vel.z;
-  const initialY = py;
+  const relVel = computeBombReleaseVelocity(release);
 
-  for (let step = 1; step <= 200; step++) {
-    const vrx = vx - env.wx;
-    const vry = vy - env.wy;
-    const vrz = vz - env.wz;
-    const vrel = Math.hypot(vrx, vry, vrz);
+  _ccipSimState.px = release.x;
+  _ccipSimState.py = release.y;
+  _ccipSimState.pz = release.z;
+  _ccipSimState.vx = relVel.vx;
+  _ccipSimState.vy = relVel.vy;
+  _ccipSimState.vz = relVel.vz;
 
-    const adx = -env.dragCoeff * vrel * vrx;
-    const ady = -env.dragCoeff * vrel * vry;
-    const adz = -env.dragCoeff * vrel * vrz;
+  const initialY = release.y;
+  let prevX = release.x;
+  let prevY = release.y;
+  let prevZ = release.z;
+  let prevGround = wildernessHeight(prevX, prevZ);
 
-    vx += adx * stepDt;
-    vy += (-9.8 + ady) * stepDt;
-    vz += adz * stepDt;
+  for (let step = 1; step <= 230; step++) {
+    const tSec = (step - 1) * stepDt;
+    stepBombRK4(_ccipSimState, stepDt, tSec, env, false);
 
-    px += vx * stepDt;
-    py += vy * stepDt;
-    pz += vz * stepDt;
+    const ground = wildernessHeight(_ccipSimState.px, _ccipSimState.pz);
+    if (_ccipSimState.py <= ground + 0.25) {
+      const prevClearance = Math.max(0, prevY - (prevGround + 0.25));
+      const curPenetration = (ground + 0.25) - _ccipSimState.py;
+      const denom = prevClearance + curPenetration;
+      const frac = denom > 0.0001 ? THREE.MathUtils.clamp(prevClearance / denom, 0, 1) : 1.0;
 
-    const ground = wildernessHeight(px, pz);
-    if (py <= ground + 0.25) {
-      const tti = step * stepDt;
-      const fallDist = initialY - (ground + 0.15);
+      const hitX = prevX + (_ccipSimState.px - prevX) * frac;
+      const hitZ = prevZ + (_ccipSimState.pz - prevZ) * frac;
+      const hitGround = wildernessHeight(hitX, hitZ);
+      const tti = (step - 1 + frac) * stepDt;
+      const fallDist = initialY - (hitGround + 0.15);
       const isArmed = (tti >= 0.55) && (fallDist >= 6.0);
-      return { x: px, y: ground + 0.15, z: pz, tti, armed: isArmed, fallDist };
+      return { x: hitX, y: hitGround + 0.15, z: hitZ, tti, armed: isArmed, fallDist };
     }
+
+    prevX = _ccipSimState.px;
+    prevY = _ccipSimState.py;
+    prevZ = _ccipSimState.pz;
+    prevGround = ground;
   }
   return null;
 }
@@ -5240,24 +6945,37 @@ function dropBomb() {
     return;
   }
 
-  const spawnPos = nextBombMount().getWorldPosition(new THREE.Vector3());
+  const mountIndex = Math.max(0, tacticalState.bombsRemaining - 1);
+  const mount = bellyBombMeshes[mountIndex];
+  const spawnPos = mount.getWorldPosition(new THREE.Vector3());
+  const spawnQuat = mount.getWorldQuaternion(new THREE.Quaternion());
+  const relVel = computeBombReleaseVelocity(spawnPos);
+
   tacticalState.bombsRemaining -= 1;
   tacticalState.bombsDropped += 1;
 
+  // Hardcore Release Recoil & Asymmetric CG Unloading Impulse
+  drone.vel.y += 0.42;
+  drone.rollRate = (drone.rollRate || 0) + (mountIndex === 0 ? 1 : -1) * 0.52;
+  drone.pitchRate = (drone.pitchRate || 0) + 0.20;
+
   audioEngine.playBombRelease();
-  audioEngine.playBombWhistle();
 
   const bombMesh = createBombMesh();
-  bombMesh.scale.setScalar(.65);
+  bombMesh.scale.setScalar(.68);
   bombMesh.position.copy(spawnPos);
+  bombMesh.quaternion.copy(spawnQuat);
   scene.add(bombMesh);
 
   tacticalState.activeBombs.push({
     mesh: bombMesh,
     pos: spawnPos.clone(),
-    vel: new THREE.Vector3(drone.vel.x, drone.vel.y - 1.2, drone.vel.z),
+    vel: new THREE.Vector3(relVel.vx, relVel.vy, relVel.vz),
+    quaternion: spawnQuat.clone(),
     spawnY: spawnPos.y,
     life: 0,
+    spinRate: (Math.random() > 0.5 ? 1 : -1) * (2.4 + Math.random() * 1.6),
+    spinAngle: 0,
     armed: false
   });
 
@@ -5266,18 +6984,21 @@ function dropBomb() {
     showAnnouncement('MISSION AMMO EXPENDED', '已投放最後一枚，請返回臨時放飛點降落。', '#f59e0b');
     return;
   }
-  showAnnouncement('BOMB AWAY!', `炸彈已投放！剩餘：${tacticalState.bombsRemaining} 枚`, '#fbbf24');
+  showAnnouncement('82mm MORTAR AWAY!', `82mm迫擊砲彈已投擲！剩餘：${tacticalState.bombsRemaining} 枚`, '#fbbf24');
 }
+
+const _bombStepState = { px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0 };
 
 function updateActiveBombs(dt) {
   if (!tacticalState.activeBombs.length) return;
 
   const env = getBombAtmosphere();
-  const subSteps = Math.max(1, Math.min(8, Math.ceil(dt / 0.02)));
+  const subSteps = Math.max(1, Math.min(8, Math.ceil(dt / 0.018)));
   const subDt = dt / subSteps;
 
   for (let i = tacticalState.activeBombs.length - 1; i >= 0; i--) {
     const b = tacticalState.activeBombs[i];
+    const baseLife = b.life;
     b.life += dt;
 
     if (b.life > 12.0) {
@@ -5286,38 +7007,67 @@ function updateActiveBombs(dt) {
       continue;
     }
 
+    _bombStepState.px = b.pos.x;
+    _bombStepState.py = b.pos.y;
+    _bombStepState.pz = b.pos.z;
+    _bombStepState.vx = b.vel.x;
+    _bombStepState.vy = b.vel.y;
+    _bombStepState.vz = b.vel.z;
+
     for (let s = 0; s < subSteps; s++) {
-      const vrx = b.vel.x - env.wx;
-      const vry = b.vel.y - env.wy;
-      const vrz = b.vel.z - env.wz;
-      const vrel = Math.hypot(vrx, vry, vrz);
-
-      let turbX = 0;
-      let turbZ = 0;
-      if (env.turbulence > 0) {
-        const tSec = b.life + s * subDt;
-        turbX = Math.sin(tSec * 9.7) * env.turbulence * 0.22;
-        turbZ = Math.cos(tSec * 8.3) * env.turbulence * 0.22;
-      }
-
-      const adx = -env.dragCoeff * vrel * vrx + turbX;
-      const ady = -env.dragCoeff * vrel * vry;
-      const adz = -env.dragCoeff * vrel * vrz + turbZ;
-
-      b.vel.x += adx * subDt;
-      b.vel.y += (-9.8 + ady) * subDt;
-      b.vel.z += adz * subDt;
-
-      b.pos.x += b.vel.x * subDt;
-      b.pos.y += b.vel.y * subDt;
-      b.pos.z += b.vel.z * subDt;
+      stepBombRK4(_bombStepState, subDt, baseLife + s * subDt, env, true);
     }
 
+    b.pos.set(_bombStepState.px, _bombStepState.py, _bombStepState.pz);
+    b.vel.set(_bombStepState.vx, _bombStepState.vy, _bombStepState.vz);
     b.mesh.position.copy(b.pos);
 
-    if (b.vel.lengthSq() > 0.1) {
-      const dir = b.vel.clone().normalize();
-      b.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
+    // Full Upgrade Aerodynamics: Pitch-Down Flip, Damped Oscillation Wobble, Axial Roll Spin
+    const groundHere = wildernessHeight(b.pos.x, b.pos.z);
+    const shearHere = computeWindShearMultiplier(Math.max(0.5, b.pos.y - groundHere));
+    const vrx = b.vel.x - env.wx * shearHere;
+    const vry = b.vel.y - env.wy;
+    const vrz = b.vel.z - env.wz * shearHere;
+    const relSpeed = Math.hypot(vrx, vry, vrz);
+
+    if (relSpeed > 0.25) {
+      const targetDir = new THREE.Vector3(vrx / relSpeed, vry / relSpeed, vrz / relSpeed);
+      // Bomb local -Z points along nose tip/striker in world coordinates
+      const currentNose = new THREE.Vector3(0, 0, -1).applyQuaternion(b.quaternion);
+
+      const dot = Math.max(-1.0, Math.min(1.0, currentNose.dot(targetDir)));
+      const angle = Math.acos(dot);
+
+      if (angle > 0.001) {
+        let rotAxis = new THREE.Vector3().crossVectors(currentNose, targetDir);
+        if (rotAxis.lengthSq() < 0.000001) {
+          // Antiparallel fallback axis perpendicular to currentNose
+          rotAxis = Math.abs(currentNose.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+          rotAxis.cross(currentNose);
+        }
+        rotAxis.normalize();
+        const airTurnSpeed = Math.min(10.0, 3.2 + relSpeed * 0.42);
+        const stepAngle = Math.min(angle, airTurnSpeed * dt);
+        const deltaQuat = new THREE.Quaternion().setFromAxisAngle(rotAxis, stepAngle);
+        b.quaternion.premultiply(deltaQuat);
+        b.quaternion.normalize();
+      }
+
+      // Post-release aerodynamic wobble & damping oscillation (e^-3.2t)
+      const wobbleDecay = Math.exp(-3.2 * b.life);
+      if (wobbleDecay > 0.02) {
+        const wobblePitch = Math.sin(b.life * 14.0) * 0.18 * wobbleDecay;
+        const wobbleYaw = Math.cos(b.life * 11.2) * 0.12 * wobbleDecay;
+        const wobbleEuler = new THREE.Euler(wobblePitch, wobbleYaw, 0, 'YXZ');
+        const wobbleQuat = new THREE.Quaternion().setFromEuler(wobbleEuler);
+        b.mesh.quaternion.copy(b.quaternion).multiply(wobbleQuat);
+      } else {
+        b.mesh.quaternion.copy(b.quaternion);
+      }
+
+      // Axial roll spin around longitudinal axis (-Z)
+      b.spinAngle += b.spinRate * dt;
+      b.mesh.rotateZ(b.spinAngle);
     }
 
     const fallDist = b.spawnY - b.pos.y;
@@ -5411,13 +7161,36 @@ function createBlastEffect(x,y,z,strength) {
     puff(i%2===0 ? 0xa38f6e : 0x8b7960,dx*1.4,ground+.62,dz*1.4,
       3.8,1.85+(i%4)*.16,i*.027,dx*6+driftX*.35,.47,dz*6+driftZ*.35,4.1,.64,false,.45);
   }
+  // Dynamic fireball illumination PointLight + expanding Mach-stem shockwave ring
+  const flashLight = new THREE.PointLight(0xff9436, 7.5 * strength, 46 * strength, 1.7);
+  flashLight.position.set(0, 1.8, 0);
+  group.add(flashLight);
+
+  const ringGeo = new THREE.RingGeometry(0.85, 1.15, 32);
+  ringGeo.rotateX(-Math.PI / 2);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffedd5,
+    transparent: true,
+    opacity: 0.72,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+  const shockRing = new THREE.Mesh(ringGeo, ringMat);
+  shockRing.position.set(0, ground + 0.32, 0);
+  group.add(shockRing);
+
   scene.add(group);
-  tacticalState.explosions.push({group,particles,life:0,maxLife:6});
+  tacticalState.explosions.push({group,particles,flashLight,shockRing,strength,life:0,maxLife:6});
 }
 
 function removeBlastEffect(effect) {
   scene.remove(effect.group);
   for (const {sprite} of effect.particles) sprite.material.dispose();
+  if (effect.shockRing) {
+    effect.shockRing.geometry.dispose();
+    effect.shockRing.material.dispose();
+  }
 }
 
 function triggerDudAt(x, y, z, fallDist, fallTime) {
@@ -5430,6 +7203,47 @@ function triggerDudAt(x, y, z, fallDist, fallTime) {
   );
 }
 
+function createTrackDamageSmoke(x, y, z, patrolDir) {
+  const group = new THREE.Group();
+  group.position.set(x, Math.max(y, wildernessRoadBaseHeight(x, z) + 0.18), z);
+  const particles = [];
+  const weather = WEATHER_PROFILES[state.weather] || WEATHER_PROFILES.clear;
+  const driftX = Math.cos(weather.windAngle) * weather.windSpeed * 0.45;
+  const driftZ = Math.sin(weather.windAngle) * weather.windSpeed * 0.45;
+
+  for (let i = 0; i < 3; i++) {
+    const mat = new THREE.SpriteMaterial({
+      color: i === 0 ? 0x221f1d : 0x4a433d,
+      map: getBlastTexture(),
+      transparent: true,
+      depthWrite: false, // PREVENTS OCCLUSION OF ROAD & GROUND MESHES
+      opacity: 0,
+      blending: THREE.NormalBlending,
+      rotation: Math.random() * Math.PI * 2
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.visible = false;
+    group.add(sprite);
+    particles.push({
+      sprite,
+      x: (Math.random() - 0.5) * 0.4,
+      y: 0.08 + i * 0.12,
+      z: (Math.random() - 0.5) * 0.5,
+      size: 0.8 + i * 0.25,
+      spread: 1.5,
+      life: 1.3 + i * 0.2,
+      delay: i * 0.06,
+      vx: -patrolDir * 1.1 + driftX,
+      vy: 1.1 + i * 0.25,
+      vz: (Math.random() - 0.5) * 0.5 + driftZ,
+      opacity: 0.52,
+      flatten: 1
+    });
+  }
+  scene.add(group);
+  tacticalState.explosions.push({ group, particles, life: 0, maxLife: 2.0 });
+}
+
 function createDudBlastEffect(x, y, z) {
   const group = new THREE.Group();
   group.position.set(x, Math.max(y, wildernessHeight(x, z) + 0.1), z);
@@ -5438,6 +7252,7 @@ function createDudBlastEffect(x, y, z) {
       color: 0x9ca3af,
       map: getBlastTexture(),
       transparent: true,
+      depthWrite: false, // PREVENTS DEPTH CUTOUT ARTIFACTS
       opacity: 0.55,
       blending: THREE.NormalBlending
     });
@@ -5453,6 +7268,395 @@ function createDudBlastEffect(x, y, z) {
       for (const sprite of group.children) sprite.material.dispose();
     }
   }, 1200);
+}
+
+function applyTankCamoBattleDamage(tank, localX, localZ, severity, isFatal) {
+  const parts = tank.tankParts;
+  if (!parts || !parts.camouflageCtx || !parts.camouflageTexture) return;
+  const ctx = parts.camouflageCtx;
+
+  if (isFatal) {
+    // Heavy carbon-black & heat-oxidized rust patina across the entire hull & turret
+    ctx.fillStyle = 'rgba(18, 15, 13, 0.72)';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 28; i++) {
+      const bx = (i * 73 + 19) % 256;
+      const by = (i * 113 + 41) % 256;
+      const br = 22 + (i % 5) * 12;
+      const grad = ctx.createRadialGradient(bx, by, 3, bx, by, br);
+      if (i % 3 === 0) {
+        grad.addColorStop(0, 'rgba(72, 36, 18, 0.75)'); // Heat-blistered oxide rust
+        grad.addColorStop(0.55, 'rgba(32, 22, 16, 0.58)');
+        grad.addColorStop(1, 'rgba(18, 15, 13, 0)');
+      } else {
+        grad.addColorStop(0, 'rgba(8, 7, 6, 0.92)'); // Deep black soot char
+        grad.addColorStop(0.65, 'rgba(22, 19, 17, 0.64)');
+        grad.addColorStop(1, 'rgba(22, 19, 17, 0)');
+      }
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Localized blast scorch + shrapnel gouges mapped across hull/turret UVs
+  const uBase = THREE.MathUtils.clamp((localX + 1.35) / 2.7, 0.08, 0.92);
+  const vBase = THREE.MathUtils.clamp((localZ + 2.5) / 5.0, 0.08, 0.92);
+  const centers = [
+    [uBase * 256, vBase * 256],
+    [((uBase + 0.42) % 1) * 256, ((vBase + 0.31) % 1) * 256],
+    [((1 - uBase) * 256), ((vBase * 0.7 + 0.15) * 256)]
+  ];
+  const baseRadius = (isFatal ? 68 : 38 + severity * 28);
+  centers.forEach(([cx, cy], idx) => {
+    const r = baseRadius * (idx === 0 ? 1.0 : 0.72);
+    const soot = ctx.createRadialGradient(cx, cy, 4, cx, cy, r);
+    soot.addColorStop(0, 'rgba(6, 5, 5, 0.95)');
+    soot.addColorStop(0.42, 'rgba(24, 18, 14, 0.82)');
+    soot.addColorStop(0.75, 'rgba(58, 34, 20, 0.46)');
+    soot.addColorStop(1, 'rgba(24, 18, 14, 0)');
+    ctx.fillStyle = soot;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Jagged metallic shrapnel scratches radiating from impact
+    ctx.strokeStyle = idx === 0 ? 'rgba(148, 156, 164, 0.55)' : 'rgba(15, 13, 12, 0.78)';
+    ctx.lineWidth = 1.8;
+    for (let s = 0; s < 10; s++) {
+      const ang = s * 0.628 + idx * 1.1;
+      const len = r * (0.45 + (s % 3) * 0.25);
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(ang) * 4, cy + Math.sin(ang) * 4);
+      ctx.lineTo(cx + Math.cos(ang) * len, cy + Math.sin(ang) * len);
+      ctx.stroke();
+    }
+  });
+
+  if (tank.armorMat) {
+    if (isFatal) {
+      tank.armorMat.color.setHex(0x575049);
+      tank.armorMat.roughness = 0.96;
+      tank.armorMat.metalness = 0.08;
+    } else {
+      tank.armorMat.color.setHex(0x7c766d);
+      tank.armorMat.roughness = Math.min(0.94, tank.armorMat.roughness + 0.08);
+    }
+  }
+  parts.camouflageTexture.needsUpdate = true;
+}
+
+function launchTankSubPartDebris(mesh, worldCenter, speed, clearance = 0.14) {
+  const clone = mesh.clone();
+  mesh.updateWorldMatrix(true, false);
+  mesh.matrixWorld.decompose(clone.position, clone.quaternion, clone.scale);
+  clone.visible = true;
+  clone.castShadow = true;
+  wildernessGroup.add(clone);
+  const dx = clone.position.x - worldCenter.x;
+  const dz = clone.position.z - worldCenter.z;
+  const outAng = Math.atan2(dz, dx) + (Math.random() - 0.5) * 0.65;
+  tacticalState.debris.push({
+    mesh: clone,
+    clearance,
+    settled: false,
+    ownsGeometry: false,
+    velocity: new THREE.Vector3(
+      Math.cos(outAng) * speed,
+      2.1 + Math.random() * 2.2,
+      Math.sin(outAng) * speed
+    ),
+    spin: new THREE.Vector3(
+      (Math.random() - 0.5) * 5.2,
+      (Math.random() - 0.5) * 4.4,
+      (Math.random() - 0.5) * 5.6
+    )
+  });
+}
+
+function addTankImpactCrater(tank, localHit, severity, isFatal) {
+  const parts = tank.tankParts;
+  if (!parts || !parts.damageGroup) return;
+
+  const craterGroup = new THREE.Group();
+  const cx = THREE.MathUtils.clamp(localHit.x, -1.05, 1.05);
+  const cz = THREE.MathUtils.clamp(localHit.z, -2.15, 2.15);
+  // Place on hull roof (y ~ 1.224) or frontal glacis if z < -1.65
+  const onGlacis = cz < -1.68;
+  const cy = onGlacis ? 0.96 + (cz + 2.25) * 0.52 : 1.225;
+  craterGroup.position.set(cx, cy, cz);
+  if (onGlacis) craterGroup.rotation.x = -Math.PI / 6;
+
+  const craterR = isFatal ? 0.52 : (0.30 + severity * 0.16);
+  // 1. Outer charred blast soot ring on hull
+  const scorchMat = new THREE.MeshBasicMaterial({
+    color: 0x0e0c0a,
+    transparent: true,
+    opacity: 0.9,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3
+  });
+  const scorchDisc = new THREE.Mesh(new THREE.CircleGeometry(craterR * 2.15, 20).rotateX(-Math.PI / 2), scorchMat);
+  craterGroup.add(scorchDisc);
+
+  // 2. Deep pitch-black armor penetration hole
+  const holeMat = new THREE.MeshBasicMaterial({
+    color: 0x030303,
+    polygonOffset: true,
+    polygonOffsetFactor: -6,
+    polygonOffsetUnits: -6
+  });
+  const holeDisc = new THREE.Mesh(new THREE.CircleGeometry(craterR, 18).rotateX(-Math.PI / 2), holeMat);
+  holeDisc.position.y = 0.003;
+  craterGroup.add(holeDisc);
+
+  // 3. Glowing molten steel / internal fire core inside penetration hole
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: isFatal ? 0xff5400 : 0xd9480f,
+    transparent: true,
+    opacity: 0.92,
+    polygonOffset: true,
+    polygonOffsetFactor: -8,
+    polygonOffsetUnits: -8
+  });
+  const glowDisc = new THREE.Mesh(new THREE.CircleGeometry(craterR * 0.54, 14).rotateX(-Math.PI / 2), glowMat);
+  glowDisc.position.y = 0.006;
+  craterGroup.add(glowDisc);
+
+  // 4. Jagged torn steel petals bent upward around the crater rim
+  const tornSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x1e1b18,
+    roughness: 0.9,
+    metalness: 0.38,
+    side: THREE.DoubleSide
+  });
+  const petalCount = isFatal ? 8 : 6;
+  for (let i = 0; i < petalCount; i++) {
+    const ang = (i / petalCount) * Math.PI * 2 + (i % 2) * 0.2;
+    const petal = new THREE.Mesh(new THREE.BoxGeometry(craterR * 0.55, 0.028, craterR * 0.42), tornSteelMat);
+    petal.position.set(Math.cos(ang) * craterR * 0.92, 0.045, Math.sin(ang) * craterR * 0.92);
+    petal.rotation.y = -ang + Math.PI / 2;
+    petal.rotation.x = -0.52 - (i % 3) * 0.18;
+    craterGroup.add(petal);
+  }
+
+  parts.damageGroup.add(craterGroup);
+}
+
+function attachPersistentTankWreckFire(tank) {
+  const parts = tank.tankParts;
+  if (!parts || !parts.damageGroup || tank.wreckFire) return;
+
+  const fireGroup = new THREE.Group();
+  const fireSprites = [];
+  // Position fire anchors at turret-ring hole / turret breach and rear engine deck breach
+  const anchors = tank.cookOff
+    ? [
+        { x: 0, y: 1.48, z: -0.2, scale: 2.35 },
+        { x: 0.18, y: 1.85, z: -0.15, scale: 1.95 },
+        { x: -0.15, y: 1.55, z: 1.65, scale: 1.75 }
+      ]
+    : [
+        { x: 0, y: 1.52, z: 1.62, scale: 2.15 },
+        { x: 0.42, y: 2.02, z: 0.22, scale: 1.65 },
+        { x: -0.22, y: 1.78, z: -0.35, scale: 1.55 }
+      ];
+
+  anchors.forEach((a, idx) => {
+    const mat = new THREE.SpriteMaterial({
+      map: getBlastTexture(),
+      color: idx === 0 ? 0xff7b00 : (idx === 1 ? 0xffb703 : 0xe8590c),
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.position.set(a.x, a.y, a.z);
+    sprite.scale.set(a.scale, a.scale * 1.25, 1);
+    fireGroup.add(sprite);
+    fireSprites.push({ sprite, baseX: a.x, baseY: a.y, baseZ: a.z, baseScale: a.scale, phase: idx * 2.1 });
+  });
+
+  const wreckLight = new THREE.PointLight(0xff6b1a, 3.6, 19, 1.65);
+  wreckLight.position.set(0, 2.3, tank.cookOff ? -0.1 : 1.1);
+  fireGroup.add(wreckLight);
+
+  parts.damageGroup.add(fireGroup);
+  tank.wreckFire = { group: fireGroup, sprites: fireSprites, light: wreckLight };
+}
+
+function inflictTankBattleDamage(tank, worldX, worldY, worldZ, severity, isFatal, isCookOff) {
+  const parts = tank.tankParts;
+  if (!parts) return;
+
+  tank.mesh.updateWorldMatrix(true, true);
+  const worldImpact = new THREE.Vector3(worldX, worldY, worldZ);
+  const localHit = tank.mesh.worldToLocal(worldImpact.clone());
+
+  // 1. Paint carbon-black blast scorching & shrapnel scars onto hull/turret camouflage texture
+  applyTankCamoBattleDamage(tank, localHit.x, localHit.z, severity, isFatal);
+
+  // 2. Punch 3D jagged armor impact crater + glowing ember core on the hull
+  addTankImpactCrater(tank, localHit, severity, isFatal);
+
+  // 3. Rip off nearest side skirts & warp adjacent skirts so side armor visibly shreds
+  const availableSkirts = parts.skirts.filter((s) => !s.detached);
+  availableSkirts.sort((a, b) => {
+    const da = Math.hypot(a.side * 1.84 - localHit.x, a.z - localHit.z);
+    const db = Math.hypot(b.side * 1.84 - localHit.x, b.z - localHit.z);
+    return da - db;
+  });
+  const detachSkirtCount = isFatal
+    ? (isCookOff ? Math.min(availableSkirts.length, 8) : Math.min(availableSkirts.length, 5))
+    : Math.min(availableSkirts.length, Math.max(2, Math.round(severity * 4)));
+
+  for (let i = 0; i < detachSkirtCount; i++) {
+    const s = availableSkirts[i];
+    s.detached = true;
+    s.mesh.visible = false;
+    if (s.seamMesh) s.seamMesh.visible = false;
+    launchTankSubPartDebris(s.mesh, worldImpact, 2.4 + Math.random() * 2.2, 0.12);
+  }
+  // Bend/buckle remaining nearby side skirts
+  availableSkirts.slice(detachSkirtCount, detachSkirtCount + 4).forEach((s, idx) => {
+    s.mesh.rotation.z = s.side * (0.24 + (idx % 2) * 0.18);
+    s.mesh.rotation.x = (idx % 2 === 0 ? 1 : -1) * 0.22;
+    s.mesh.position.y = 0.91;
+  });
+
+  // 4. Skew/cant roadwheels & lay down broken track segment on mobility/hull hit
+  if (parts.wheelGroups && parts.wheelGroups.length) {
+    const sortedWheels = [...parts.wheelGroups].sort((a, b) => {
+      const da = Math.hypot(a.position.x - localHit.x, a.position.z - localHit.z);
+      const db = Math.hypot(b.position.x - localHit.x, b.position.z - localHit.z);
+      return da - db;
+    });
+    const wheelDamageCount = isFatal ? 5 : Math.max(2, Math.round(severity * 3));
+    for (let i = 0; i < Math.min(wheelDamageCount, sortedWheels.length); i++) {
+      const axle = sortedWheels[i];
+      const sideSign = axle.position.x < 0 ? -1 : 1;
+      axle.rotation.z = sideSign * (0.25 + (i % 3) * 0.11);
+      axle.rotation.y = (i % 2 === 0 ? 1 : -1) * 0.18;
+      axle.position.y = 0.33;
+    }
+    if (!tank.brokenTrackRibbonAdded && (tank.trackDamaged || isFatal)) {
+      tank.brokenTrackRibbonAdded = true;
+      const hitSide = localHit.x < 0 ? -1 : 1;
+      const brokenTrackMat = new THREE.MeshStandardMaterial({ color: 0x1c1a17, roughness: 0.94, metalness: 0.28 });
+      const brokenRibbon = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.06, 1.95), brokenTrackMat);
+      brokenRibbon.position.set(hitSide * 1.62, 0.08, THREE.MathUtils.clamp(localHit.z, -1.4, 1.4));
+      brokenRibbon.rotation.set(0.08, hitSide * 0.28, hitSide * 0.16);
+      parts.damageGroup.add(brokenRibbon);
+    }
+  }
+
+  // 5. Blow off ERA deck tiles & turret stowage boxes on heavy or fatal hits
+  if (severity >= 0.55 || isFatal) {
+    const tileCount = isFatal ? 4 : 2;
+    parts.deckTiles.slice(0, tileCount).forEach((tile) => {
+      if (tile.visible) {
+        tile.visible = false;
+        launchTankSubPartDebris(tile, worldImpact, 2.8 + Math.random() * 1.8, 0.08);
+      }
+    });
+    const stowCount = isFatal ? parts.stowageBoxes.length : 1;
+    parts.stowageBoxes.slice(0, stowCount).forEach((box) => {
+      if (box.visible) {
+        box.visible = false;
+        launchTankSubPartDebris(box, worldImpact, 2.2 + Math.random() * 1.9, 0.16);
+      }
+    });
+  }
+
+  // 6. Fatal Destruction States: Engine Breach + (Cook-Off Turret Toss OR Burn-Out Slumped Turret)
+  if (isFatal) {
+    if (parts.engineBreachWell) parts.engineBreachWell.visible = true;
+    if (parts.engineVents) {
+      parts.engineVents.forEach((v, idx) => {
+        if (idx % 2 === 0) v.visible = false;
+        else {
+          v.rotation.z = (idx % 3 - 1) * 0.38;
+          v.rotation.x = 0.45;
+          v.position.y = 1.29;
+        }
+      });
+    }
+
+    if (isCookOff) {
+      // Catastrophic Carousel Autoloader Cook-Off: Reveal gaping blackened turret-ring abyss in hull!
+      if (parts.turretRingWell) parts.turretRingWell.visible = true;
+    } else {
+      // Penetration & Burn-Out Kill: Turret stays on hull, wrenched off-axis, gun barrel droops, hatch blown open
+      tank.turret.visible = true;
+      const wrenchSign = localHit.x < 0 ? 1 : -1;
+      tank.turret.rotation.y += wrenchSign * (0.34 + Math.random() * 0.22);
+      tank.turret.rotation.z = wrenchSign * 0.085;
+      tank.turret.rotation.x = 0.055;
+      if (parts.barrel) {
+        parts.barrel.rotation.x = 0.23; // Slumped main gun barrel (-13 deg downward droop)
+        parts.barrel.position.y = -0.34;
+      }
+      if (parts.fumeExtractor) {
+        parts.fumeExtractor.rotation.x = 0.23;
+        parts.fumeExtractor.position.y = -0.36;
+      }
+      if (parts.cupolaHatch) {
+        parts.cupolaHatch.rotation.z = -2.1; // Commander hatch blown wide open
+      }
+      if (parts.antennaMesh) {
+        parts.antennaMesh.rotation.z = -1.25;
+      }
+    }
+
+    attachPersistentTankWreckFire(tank);
+  }
+}
+
+function createWreckFireSmokePlume(x, y, z, isCookOff) {
+  const group = new THREE.Group();
+  group.position.set(x, y, z);
+  const particles = [];
+  const weather = WEATHER_PROFILES[state.weather] || WEATHER_PROFILES.clear;
+  const driftX = Math.cos(weather.windAngle) * weather.windSpeed * 0.52;
+  const driftZ = Math.sin(weather.windAngle) * weather.windSpeed * 0.52;
+
+  // 1Rising orange flame tongue + 3 thick carbon-black oil smoke billows
+  const count = isCookOff ? 4 : 3;
+  for (let i = 0; i < count; i++) {
+    const isFlame = i === 0;
+    const mat = new THREE.SpriteMaterial({
+      color: isFlame ? (Math.random() < 0.5 ? 0xff7b00 : 0xffaa00) : (i === 1 ? 0x141210 : 0x26221e),
+      map: getBlastTexture(),
+      transparent: true,
+      depthWrite: false,
+      opacity: 0,
+      blending: isFlame ? THREE.AdditiveBlending : THREE.NormalBlending,
+      rotation: Math.random() * Math.PI * 2
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.visible = false;
+    group.add(sprite);
+    particles.push({
+      sprite,
+      x: (Math.random() - 0.5) * 0.65,
+      y: isFlame ? 0.15 : 0.35 + i * 0.25,
+      z: (Math.random() - 0.5) * 0.65,
+      size: isFlame ? 1.35 : 1.45 + i * 0.45,
+      spread: isFlame ? 1.2 : 2.65,
+      life: isFlame ? 0.65 : 2.4 + i * 0.45,
+      delay: i * 0.05,
+      vx: (Math.random() - 0.5) * 0.45 + driftX * (isFlame ? 0.25 : 0.85),
+      vy: isFlame ? 2.4 : 2.1 + i * 0.35,
+      vz: (Math.random() - 0.5) * 0.45 + driftZ * (isFlame ? 0.25 : 0.85),
+      opacity: isFlame ? 0.78 : 0.68,
+      flatten: 1
+    });
+  }
+  scene.add(group);
+  tacticalState.explosions.push({ group, particles, life: 0, maxLife: 3.4 });
 }
 
 function triggerExplosionAt(x, y, z, directHitTarget) {
@@ -5486,17 +7690,98 @@ function triggerExplosionAt(x, y, z, directHitTarget) {
     if (t.destroyed) return;
     const dist = Math.hypot(x - t.pos.x, z - t.pos.z);
     if (dist <= t.radius + 1.5 || t === directHitTarget) {
-      const isDirect = dist <= 4.0 || t === directHitTarget;
-      const dmg = isDirect ? 100 : Math.round((1 - dist / (t.radius + 2.0)) * 75);
-      t.hp = Math.max(0, t.hp - dmg);
+      if (t.type === 'tank') {
+        // Realistic 82mm Air-Drop Mortar vs. Main Battle Tank Armor Mechanics
+        t.mesh.updateWorldMatrix(true, true);
+        const localHit = t.mesh.worldToLocal(new THREE.Vector3(x, y, z));
+        const turretDist = Math.hypot(localHit.x, localHit.z + 0.2);
+        const onThinRoofWeakspot =
+          Math.abs(localHit.x) <= 1.25 &&
+          localHit.z >= -1.38 &&
+          localHit.z <= 2.38 &&
+          dist <= 2.45;
+        const isBullseyeCarouselHit = turretDist <= 1.48 && dist <= 1.95;
+        const isDirectHullHit = dist <= 3.85 || t === directHitTarget;
 
-      if (isDirect) {
-        directHit = true;
-        showAnnouncement('DIRECT HIT!', `致命直擊！【${t.name}】遭受毀滅重創！`, '#ef4444');
-      }
+        t.hitCount = (t.hitCount || 0) + 1;
+        let dmg = 0;
+        if (onThinRoofWeakspot) {
+          // 82mm shaped-charge / HE top-attack perforates thin (20-30mm) turret roof or engine deck
+          dmg = 100;
+          directHit = true;
+        } else if (isDirectHullHit) {
+          // Direct hit on thick frontal glacis, side skirts, or outer track assembly:
+          // Cannot 1-shot kill an MBT or flip its turret on first hit; cripples hull & tracks (62 dmg)
+          dmg = 62;
+          directHit = true;
+        } else {
+          // Near-miss fragmentation & blast wave splash (28 - 48 dmg)
+          dmg = Math.max(26, Math.round((1 - dist / (t.radius + 1.8)) * 64));
+        }
 
-      if (t.hp <= 0) {
-        destroyTarget(t, x, y, z);
+        t.hp = Math.max(0, t.hp - dmg);
+        const willDestroy = t.hp <= 0;
+        // Turret toss (Carousel Ammo Cook-Off) ONLY occurs if a precision top-attack hit
+        // penetrates the central autoloader carousel OR a 2nd lethal hit strikes the turret/hull center!
+        if (willDestroy) {
+          t.cookOff = isBullseyeCarouselHit || (t.hitCount >= 2 && turretDist <= 1.95);
+        }
+
+        const severity = THREE.MathUtils.clamp(dmg / 85, 0.35, 1.0);
+        inflictTankBattleDamage(t, x, y, z, severity, willDestroy, t.cookOff);
+        addWreckScorchAt(x, z, willDestroy ? 4.4 : 2.8);
+
+        if (willDestroy) {
+          destroyTarget(t, x, y, z);
+          if (t.cookOff) {
+            showAnnouncement(
+              'AMMO COOK-OFF!',
+              `頂攻貫穿轉盤彈藥架！【${t.name}】內部裝藥引燃大殉爆掀飛砲塔！`,
+              '#ef4444'
+            );
+          } else {
+            showAnnouncement(
+              'TOP-ARMOR PENETRATED!',
+              `頂甲貫穿擊毀！【${t.name}】引擎室與戰鬥室起火焚毀癱瘓！`,
+              '#ef4444'
+            );
+          }
+        } else {
+          if (!t.trackDamaged) {
+            t.trackDamaged = true;
+            t.patrolSpeed *= 0.28;
+          }
+          if (isDirectHullHit) {
+            showAnnouncement(
+              'ARMOR HIT - CRITICALLY DAMAGED!',
+              `命中裝甲！【${t.name}】側裙炸飛、履帶重創冒煙 (殘餘 ${t.hp}%)，需補擊或命中頂甲弱點！`,
+              '#f59e0b'
+            );
+          } else {
+            showAnnouncement(
+              'TRACK MOBILITY KILL!',
+              `近距爆震！【${t.name}】側裙受損、履帶遭破片重創減速 (殘餘 ${t.hp}%)！`,
+              '#f59e0b'
+            );
+          }
+        }
+      } else {
+        const isDirect = dist <= 4.0 || t === directHitTarget;
+        const dmg = isDirect ? 100 : Math.round((1 - dist / (t.radius + 2.0)) * 75);
+        t.hp = Math.max(0, t.hp - dmg);
+
+        if (isDirect) {
+          directHit = true;
+          if (t.type === 'radar') {
+            showAnnouncement('RADAR DESTROYED!', `精準直擊！【${t.name}】天線與基座徹底粉碎！`, '#ef4444');
+          } else {
+            showAnnouncement('DIRECT HIT!', `精準直擊！【${t.name}】遭受致命摧毀！`, '#ef4444');
+          }
+        }
+
+        if (t.hp <= 0) {
+          destroyTarget(t, x, y, z);
+        }
       }
     }
   });
@@ -5547,40 +7832,44 @@ function makeTornFragment(seed, length, width, bend) {
   return geometry;
 }
 
-function addWreckScorch(target) {
-  const radius = target.type === 'ammo' ? 6.2 : 4.3;
+function addWreckScorchAt(wx, wz, radius = 4.3) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
   const ctx = canvas.getContext('2d');
-  const soot = ctx.createRadialGradient(64,64,7,64,64,63);
-  soot.addColorStop(0,'rgba(27,23,19,.82)');
-  soot.addColorStop(.56,'rgba(39,32,24,.57)');
-  soot.addColorStop(1,'rgba(39,32,24,0)');
+  const soot = ctx.createRadialGradient(64, 64, 7, 64, 64, 63);
+  soot.addColorStop(0, 'rgba(18, 15, 12, 0.88)');
+  soot.addColorStop(0.56, 'rgba(34, 27, 20, 0.62)');
+  soot.addColorStop(1, 'rgba(39, 32, 24, 0)');
   ctx.fillStyle = soot;
-  ctx.fillRect(0,0,128,128);
+  ctx.fillRect(0, 0, 128, 128);
   for (let i = 0; i < 90; i++) {
     const a = i * 2.39996, d = 59 * Math.sqrt(i / 90);
-    ctx.fillStyle = `rgba(21,19,16,${.22*(1-d/60)})`;
-    ctx.fillRect(64 + Math.cos(a)*d,64 + Math.sin(a)*d,1 + i%5,1 + i%3);
+    ctx.fillStyle = `rgba(16, 14, 12, ${0.26 * (1 - d / 60)})`;
+    ctx.fillRect(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, 1 + (i % 5), 1 + (i % 3));
   }
   const map = new THREE.CanvasTexture(canvas);
   map.encoding = THREE.sRGBEncoding;
-  const geometry = new THREE.PlaneGeometry(radius*2,radius*2,14,14).rotateX(-Math.PI/2);
+  const geometry = new THREE.PlaneGeometry(radius * 2, radius * 2, 14, 14).rotateX(-Math.PI / 2);
   const points = geometry.attributes.position;
   for (let i = 0; i < points.count; i++) {
-    const x = target.pos.x + points.getX(i), z = target.pos.z + points.getZ(i);
-    const roadLift = wildernessRoadDistance(x,z) < 4.1 ? WILDERNESS_ROAD_LIFT+.04 : .035;
-    points.setY(i,wildernessRoadBaseHeight(x,z)+roadLift);
+    const x = wx + points.getX(i), z = wz + points.getZ(i);
+    const roadLift = wildernessRoadDistance(x, z) < 4.1 ? WILDERNESS_ROAD_LIFT + 0.04 : 0.035;
+    points.setY(i, wildernessRoadBaseHeight(x, z) + roadLift);
   }
   geometry.computeVertexNormals();
   const material = new THREE.MeshBasicMaterial({
-    map,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2
+    map, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2
   });
-  const mesh = new THREE.Mesh(geometry,material);
-  mesh.position.set(target.pos.x,0,target.pos.z);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(wx, 0, wz);
   mesh.renderOrder = 6;
   wildernessGroup.add(mesh);
-  tacticalState.debris.push({mesh,settled:true,ownsResources:true});
+  tacticalState.debris.push({ mesh, settled: true, ownsResources: true });
+}
+
+function addWreckScorch(target) {
+  const radius = target.type === 'ammo' ? 6.2 : 4.5;
+  addWreckScorchAt(target.pos.x, target.pos.z, radius);
 }
 
 function scatterTargetWreck(target) {
@@ -5588,15 +7877,21 @@ function scatterTargetWreck(target) {
   addWreckScorch(target);
   const wreckDirection = Math.random() * Math.PI * 2;
   const wreckSide = Math.cos(wreckDirection) < 0 ? -1 : 1;
-  const parts = target.type === 'ammo' ? target.mesh.children
-    : [target.type === 'tank' ? target.turret : target.dish];
-  function launch(mesh,index,speed,clearance,ownsGeometry = false) {
+  // For tanks: ONLY detach and launch the 12-ton turret if an internal Carousel Ammo Cook-Off occurred!
+  const parts = target.type === 'ammo'
+    ? target.mesh.children
+    : (target.type === 'tank' ? (target.cookOff ? [target.turret] : []) : [target.dish]);
+  function launch(mesh,index,speed,clearance,ownsGeometry = false,customVelY = null,customSpin = null) {
     const angle = wreckDirection + index * 2.39996;
     wildernessGroup.add(mesh);
     tacticalState.debris.push({
       mesh,clearance,settled:false,ownsGeometry,
-      velocity:new THREE.Vector3(Math.cos(angle)*speed,1.4+index%4*.6,Math.sin(angle)*speed),
-      spin:new THREE.Vector3(.4+index%3*.65,-.5+index%4*.31,.4-index%4*.22)
+      velocity:new THREE.Vector3(
+        Math.cos(angle)*speed,
+        customVelY !== null ? customVelY : (1.4+index%4*.6),
+        Math.sin(angle)*speed
+      ),
+      spin:customSpin || new THREE.Vector3(.4+index%3*.65,-.5+index%4*.31,.4-index%4*.22)
     });
   }
   parts.forEach((part,index) => {
@@ -5630,7 +7925,18 @@ function scatterTargetWreck(target) {
     part.matrixWorld.decompose(piece.position,piece.quaternion,piece.scale);
     piece.visible = true;
     if (target.type === 'tank') {
-      launch(piece, 2, 1.8 + Math.random() * 1.2, .42);
+      // Reveal gaping circular turret-ring abyss inside the tank hull
+      if (target.turretRingWell) target.turretRingWell.visible = true;
+      // Internal ammo cook-off launches the turret upward with heavy tumbling spin
+      launch(
+        piece,
+        2,
+        2.4 + Math.random() * 1.3,
+        0.44,
+        false,
+        6.2 + Math.random() * 2.1,
+        new THREE.Vector3(2.35, -1.45, 2.65)
+      );
     } else if (target.type === 'radar' || partType === 'roof') {
       piece.position.x += wreckSide * (target.type === 'radar' ? 2.15 : (index % 2 ? .65 : -.52));
       piece.position.y = wildernessRoadBaseHeight(piece.position.x,piece.position.z)
@@ -5642,35 +7948,119 @@ function scatterTargetWreck(target) {
       launch(piece,index,1.75,.47);
     }
   });
-  const shardCount = target.type === 'ammo' ? 15 : 9;
+  const shardCount = target.type === 'ammo' ? 15 : (target.type === 'tank' ? 14 : 9);
   for (let i = 0; i < shardCount; i++) {
-    const length = i % 5 === 0 ? .78 : .16 + (i % 6) * .10;
-    const width = length*(.26+(i%4)*.15);
-    const shard = new THREE.Mesh(makeTornFragment(i+.7,length,width,.052+(i%3)*.032),wreckShardMaterial);
+    const length = i % 5 === 0 ? .82 : .18 + (i % 6) * .11;
+    const width = length*(.28+(i%4)*.15);
+    const shard = new THREE.Mesh(makeTornFragment(i+.7,length,width,.055+(i%3)*.035),wreckShardMaterial);
     const angle = i*2.39996;
-    const spread = 1.1+(i%5)*.32;
+    const spread = 1.05+(i%5)*.34;
     shard.position.copy(target.pos);
     shard.position.x += Math.cos(angle)*spread;
     shard.position.z += Math.sin(angle)*spread;
-    shard.position.y += .35+i%4*.22;
+    shard.position.y += .42+i%4*.24;
     shard.rotation.set(i*.72,angle,i*.21);
     shard.castShadow = true;
-    launch(shard,i+2,.85+i%5*.28,.055,true);
+    launch(shard,i+2,1.15+i%5*.38,.055,true);
   }
+}
+
+function attachFacilityWreckFire(t) {
+  if (t.wreckFire || !t.mesh) return;
+  // Scorch & darken surviving bunker / radar electronics cabin materials
+  t.mesh.traverse((child) => {
+    if (!child.isMesh || !child.material || child.material.userData?.thermalProxy) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    mats.forEach((m) => {
+      if (m && m.color && !m.userData?.wreckScorched) {
+        const origHex = m.color.getHex();
+        const origRough = m.roughness;
+        m.color.multiplyScalar(0.46);
+        if (typeof m.roughness === 'number') m.roughness = Math.min(1.0, m.roughness + 0.25);
+        m.userData = { ...(m.userData || {}), wreckScorched: true, origHex, origRough };
+      }
+    });
+  });
+
+  const fireGroup = new THREE.Group();
+  const fireSprites = [];
+  const anchors = t.type === 'ammo'
+    ? [
+        { x: -1.4, y: 1.35, z: -0.2, scale: 2.35 },
+        { x: 1.5, y: 1.25, z: 0.4, scale: 2.15 },
+        { x: 0.1, y: 1.65, z: -0.9, scale: 2.55 },
+        { x: -0.4, y: 1.15, z: 1.2, scale: 1.85 }
+      ]
+    : [
+        { x: 0.0, y: 1.45, z: 0.0, scale: 1.95 },
+        { x: -0.9, y: 1.15, z: 0.55, scale: 1.55 },
+        { x: 0.85, y: 2.25, z: -0.35, scale: 1.65 }
+      ];
+
+  anchors.forEach((a, idx) => {
+    const mat = new THREE.SpriteMaterial({
+      map: getBlastTexture(),
+      color: idx % 2 === 0 ? 0xff7b00 : 0xffb703,
+      transparent: true,
+      opacity: 0.84,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.position.set(a.x, a.y, a.z);
+    sprite.scale.set(a.scale, a.scale * 1.28, 1);
+    fireGroup.add(sprite);
+    fireSprites.push({ sprite, baseX: a.x, baseY: a.y, baseZ: a.z, baseScale: a.scale, phase: idx * 1.9 });
+  });
+
+  const wreckLight = new THREE.PointLight(0xff6b1a, t.type === 'ammo' ? 4.4 : 3.4, 24, 1.6);
+  wreckLight.position.set(0, 2.5, 0);
+  fireGroup.add(wreckLight);
+
+  t.mesh.add(fireGroup);
+  t.wreckFire = { group: fireGroup, sprites: fireSprites, light: wreckLight };
+  t.wreckSmokeTimer = 0;
 }
 
 function destroyTarget(t, x, y, z) {
   t.destroyed = true;
   if (t.thermal) {
     t.stoppedAt = state.elapsedTime;
-    updateTankThermalSignature(t,state.elapsedTime);
+    if (t.type === 'tank') updateTankThermalSignature(t, state.elapsedTime);
+    else if (t.type === 'radar') updateRadarThermalSignature(t, state.elapsedTime);
   }
   t.hp = 0;
 
   if (t.armorMat) {
     t.armorMat.color.setHex(0x4b4742);
   }
+
+  if (t.type === 'tank') {
+    // Ensure full fatal battle damage & wreck fire are applied even if destroyTarget is invoked directly
+    if (!t.wreckFire) {
+      inflictTankBattleDamage(t, x ?? t.pos.x, y ?? t.pos.y + 1.2, z ?? t.pos.z, 1.0, true, !!t.cookOff);
+    }
+    // 50-ton Main Battle Tank forward kinetic momentum / coasting inertia
+    t.coasting = !t.cookOff; // Cook-off halts the hull faster via massive internal impulse
+    const curSpeed = t.speedX || (t.patrolDir * t.patrolSpeed * 0.25);
+    t.coastSpeed = Math.abs(curSpeed) < 0.6 ? t.patrolDir * 1.4 : curSpeed;
+    t.coastSmokeTimer = 0;
+    t.wreckSmokeTimer = 0;
+
+    if (t.cookOff) {
+      // Secondary internal carousel propellant detonation & vertical flame column
+      tacticalState.pendingExplosions.push(
+        { x: t.pos.x, y: t.pos.y + 1.5, z: t.pos.z, delay: 0.14, visualStrength: 2.45 },
+        { x: t.pos.x + (Math.random() - 0.5) * 0.8, y: t.pos.y + 2.1, z: t.pos.z + (Math.random() - 0.5) * 0.8, delay: 0.38, visualStrength: 1.85 }
+      );
+    }
+  }
+
   scatterTargetWreck(t);
+
+  if (t.type === 'radar' || t.type === 'ammo') {
+    attachFacilityWreckFire(t);
+  }
 
   if (t.type === 'ammo') {
     showAnnouncement('CHAIN REACTION!', '彈藥庫連鎖大殉爆！衝擊波瓦解周邊！', '#f59e0b');
@@ -5681,7 +8071,7 @@ function destroyTarget(t, x, y, z) {
       { x: x - 3.7, y, z: z - 1.6, delay: 1.16, visualStrength: 2.35 },
       { x, y, z, delay: 1.58, visualStrength: 3.15 }
     );
-  } else {
+  } else if (t.type !== 'tank') {
     showAnnouncement('TARGET DESTROYED!', `目標消滅！【${t.name}】已徹底擊毀！`, '#10b981');
   }
 
@@ -5741,6 +8131,26 @@ function updateExplosions(dt) {
   for (let i = tacticalState.explosions.length - 1; i >= 0; i--) {
     const exp = tacticalState.explosions[i];
     exp.life += dt;
+    if (exp.flashLight) {
+      if (exp.life < 0.55) {
+        const flashPhase = exp.life / 0.55;
+        const flicker = 0.88 + 0.12 * Math.sin(exp.life * 65.0);
+        exp.flashLight.intensity = (7.5 * (exp.strength || 1)) * Math.pow(1.0 - flashPhase, 2.2) * flicker;
+      } else {
+        exp.flashLight.intensity = 0;
+        exp.flashLight.visible = false;
+      }
+    }
+    if (exp.shockRing) {
+      if (exp.life < 0.42) {
+        const rPhase = exp.life / 0.42;
+        const rScale = 1.0 + rPhase * 15.5 * (exp.strength || 1);
+        exp.shockRing.scale.set(rScale, rScale, 1);
+        exp.shockRing.material.opacity = 0.72 * Math.pow(1.0 - rPhase, 1.8);
+      } else {
+        exp.shockRing.visible = false;
+      }
+    }
     for (const p of exp.particles) {
       const time=exp.life-p.delay;
       const phase=time/p.life;
@@ -5810,9 +8220,61 @@ function alignTankToRoad(tank) {
 function updateTacticalTargets(dt) {
   if (state.gameMode !== 'tactical_strike') return;
 
+  const nowSec = performance.now() * 0.001;
   tacticalState.tanks.forEach((tank) => {
     updateTankThermalSignature(tank,state.elapsedTime);
-    if (tank.destroyed) return;
+    if (tank.destroyed) {
+      // Animate persistent 3D wreck flames & glowing turret-ring/engine embers
+      if (tank.wreckFire) {
+        const wf = tank.wreckFire;
+        const pulse = 0.82 + 0.18 * Math.sin(nowSec * 17.0) * Math.cos(nowSec * 29.0);
+        if (wf.light) wf.light.intensity = (tank.cookOff ? 4.2 : 3.2) * pulse;
+        wf.sprites.forEach((s, idx) => {
+          const flk = Math.sin(nowSec * (11.0 + idx * 3.7) + s.phase);
+          const scaleX = s.baseScale * (0.88 + 0.18 * flk);
+          const scaleY = s.baseScale * (1.15 + 0.28 * Math.cos(nowSec * 14.3 + s.phase));
+          s.sprite.scale.set(scaleX, scaleY, 1);
+          s.sprite.position.set(
+            s.baseX + Math.sin(nowSec * 8.5 + s.phase) * 0.08,
+            s.baseY + Math.abs(flk) * 0.14,
+            s.baseZ + Math.cos(nowSec * 7.2 + s.phase) * 0.08
+          );
+          s.sprite.material.opacity = 0.68 + 0.24 * Math.abs(flk);
+        });
+      }
+      if (tank.tankParts && tank.tankParts.emberBed) {
+        tank.tankParts.emberBed.material.opacity = 0.78 + 0.18 * Math.sin(nowSec * 9.5);
+      }
+      // Continuously emit rising black oil smoke & flame column from burning tank hulk
+      tank.wreckSmokeTimer = (tank.wreckSmokeTimer || 0) + dt;
+      if (tank.wreckSmokeTimer >= 0.32) {
+        tank.wreckSmokeTimer = 0;
+        createWreckFireSmokePlume(tank.pos.x, tank.pos.y + 1.35, tank.pos.z, !!tank.cookOff);
+      }
+
+      if (tank.coasting) {
+        // 50-ton heavy tank rolling drag and coasting deceleration (~2 seconds to stop)
+        const decelRate = 0.82;
+        const speedSign = Math.sign(tank.coastSpeed);
+        tank.coastSpeed -= speedSign * decelRate * dt;
+        if (speedSign * tank.coastSpeed <= 0.04) {
+          tank.coastSpeed = 0;
+          tank.coasting = false;
+          addWreckScorch(tank);
+        } else {
+          const travel = tank.coastSpeed * dt;
+          tank.pos.x += travel;
+          tank.rollWheels(Math.abs(travel));
+          alignTankToRoad(tank);
+          tank.coastSmokeTimer = (tank.coastSmokeTimer || 0) + dt;
+          if (tank.coastSmokeTimer >= 0.22) {
+            tank.coastSmokeTimer = 0;
+            createDudBlastEffect(tank.pos.x, tank.pos.y + 0.6, tank.pos.z);
+          }
+        }
+      }
+      return;
+    }
     const previousX = tank.pos.x;
     tank.pos.x += tank.patrolDir * tank.patrolSpeed * 0.25 * dt;
     if (tank.pos.x > tank.patrolMaxX) {
@@ -5826,6 +8288,15 @@ function updateTacticalTargets(dt) {
     tank.speedX = dt > 0 ? travel / dt : 0;
     tank.rollWheels(Math.abs(travel));
     alignTankToRoad(tank);
+
+    if ((tank.trackDamaged || tank.hp < tank.maxHp) && !tank.destroyed) {
+      tank.trackSmokeTimer = (tank.trackSmokeTimer || 0) + dt;
+      const smokeInterval = tank.hp <= 45 ? 0.28 : 0.42;
+      if (tank.trackSmokeTimer >= smokeInterval) {
+        tank.trackSmokeTimer = 0;
+        createTrackDamageSmoke(tank.pos.x - tank.patrolDir * 1.2, tank.pos.y + 0.55, tank.pos.z + (Math.random() - 0.5) * 1.1, tank.patrolDir);
+      }
+    }
 
     const angle = tank.turret.rotation.y;
     if (angle !== tank.turretTargetYaw) {
@@ -5846,9 +8317,47 @@ function updateTacticalTargets(dt) {
   });
 
   const radar = tacticalState.targets.find((t) => t.type === 'radar');
-  if (radar && !radar.destroyed && radar.dish) {
-    radar.dish.rotation.y += 1.8 * dt;
+  if (radar) {
+    if (radar.thermal) updateRadarThermalSignature(radar, state.elapsedTime);
+    if (!radar.destroyed && radar.dish) {
+      radar.dish.rotation.y += 1.8 * dt;
+      if (radar.radarParts?.beaconMat) {
+        const beaconPulse = 0.55 + 0.45 * Math.sin(nowSec * 6.2);
+        radar.radarParts.beaconMat.emissiveIntensity = 0.9 + 1.8 * beaconPulse;
+      }
+    }
   }
+
+  // Animate persistent wreck fire & black smoke plumes for destroyed Radar & Ammo Depot facilities
+  tacticalState.targets.forEach((t) => {
+    if ((t.type === 'radar' || t.type === 'ammo') && t.destroyed && t.wreckFire) {
+      const wf = t.wreckFire;
+      const pulse = 0.84 + 0.16 * Math.sin(nowSec * 15.0) * Math.cos(nowSec * 23.0);
+      if (wf.light) wf.light.intensity = (t.type === 'ammo' ? 4.4 : 3.4) * pulse;
+      wf.sprites.forEach((s, idx) => {
+        const flk = Math.sin(nowSec * (10.5 + idx * 3.1) + s.phase);
+        const scaleX = s.baseScale * (0.9 + 0.16 * flk);
+        const scaleY = s.baseScale * (1.18 + 0.26 * Math.cos(nowSec * 13.7 + s.phase));
+        s.sprite.scale.set(scaleX, scaleY, 1);
+        s.sprite.position.set(
+          s.baseX + Math.sin(nowSec * 7.8 + s.phase) * 0.1,
+          s.baseY + Math.abs(flk) * 0.16,
+          s.baseZ + Math.cos(nowSec * 6.9 + s.phase) * 0.1
+        );
+        s.sprite.material.opacity = 0.70 + 0.22 * Math.abs(flk);
+      });
+      t.wreckSmokeTimer = (t.wreckSmokeTimer || 0) + dt;
+      if (t.wreckSmokeTimer >= (t.type === 'ammo' ? 0.28 : 0.36)) {
+        t.wreckSmokeTimer = 0;
+        createWreckFireSmokePlume(
+          t.pos.x + (Math.random() - 0.5) * (t.type === 'ammo' ? 2.6 : 1.4),
+          t.pos.y + 1.4,
+          t.pos.z + (Math.random() - 0.5) * (t.type === 'ammo' ? 2.2 : 1.4),
+          t.type === 'ammo'
+        );
+      }
+    }
+  });
 }
 
 function updateCCIP() {
@@ -6119,7 +8628,12 @@ function resetDroneTransform(x, y, z, yaw = 0) {
   drone.yaw = yaw;
   drone.yawRate = 0;
   drone.pitch = 0;
+  drone.pitchRate = 0;
   drone.roll = 0;
+  drone.rollRate = 0;
+  drone.groundEffectFactor = 1.0;
+  drone.vrsSeverity = 0;
+  drone.massRatio = 1.0;
   drone.collisionCooldown = 0;
   trailPointsL.length = 0;
   trailPointsR.length = 0;
@@ -6297,85 +8811,235 @@ function updateDronePhysics(dt) {
 
   const p = PHYSICS[state.flightMode];
   const boostMult = ctrl.boost ? p.boostMultiplier : 1.0;
+  const inWilderness = state.gameMode === 'tactical_strike';
+  const groundHeightNow = inWilderness ? wildernessHeight(drone.pos.x, drone.pos.z) : 0;
+  const agl = Math.max(0, drone.pos.y - groundHeightNow - 0.95);
 
-  // 1. Yaw
-  const targetYawRate = ctrl.yaw * p.yawMaxRate;
-  drone.yawRate += (targetYawRate - drone.yawRate) * Math.min(1, p.yawResponse * dt);
-  drone.yaw += drone.yawRate * dt;
+  // Payload Mass Ratio: 2x 82mm mortar bombs (1.6kg each on 8.5kg empty airframe)
+  const bombLoadKg = inWilderness ? (tacticalState.bombsRemaining * 1.6) : 0;
+  drone.massRatio = (8.5 + bombLoadKg) / 8.5;
+  const inertiaScale = 1.0 / Math.pow(drone.massRatio, 0.38);
+  const tNow = performance.now() * 0.001;
 
-  // 2. Pitch & Roll with auto-leveling
-  const targetPitch = ctrl.brake ? 0 : -ctrl.pitch * p.maxTiltAngle;
-  const targetRoll = ctrl.brake ? 0 : -ctrl.roll * p.maxTiltAngle;
-  drone.pitch += (targetPitch - drone.pitch) * Math.min(1, p.tiltResponse * dt);
-  drone.roll += (targetRoll - drone.roll) * Math.min(1, p.tiltResponse * dt);
+  // 0. Vortex Ring State (VRS 渦環狀態 / 槳洗亂流) Evaluation
+  // Real military flight controllers protect vertical descent in Stabilized mode and require
+  // sustained vertical descent into the wake column (>1.2s at low horizontal airspeed) before a vortex ring forms.
+  const hSpeedPre = Math.hypot(drone.vel.x, drone.vel.z);
+  const cyclicEscapeInput = Math.hypot(ctrl.pitch, ctrl.roll);
+  const isSport = state.flightMode === 'sport';
+  const vrsCap = isSport ? 0.85 : 0.44;
+  if (drone.vel.y < -5.8 && hSpeedPre < 2.8 && agl > 4.5) {
+    const descentExcess = Math.min(1.0, (-drone.vel.y - 5.5) / (isSport ? 6.0 : 2.3));
+    const hoverProximity = Math.pow(1.0 - (hSpeedPre / 2.8), 0.85);
+    const targetVrs = THREE.MathUtils.clamp(descentExcess * hoverProximity * vrsCap, 0, vrsCap);
+    // Gradual toroidal wake build-up (~1.4 to 2.0s of sustained vertical drop)
+    drone.vrsSeverity = THREE.MathUtils.lerp(drone.vrsSeverity, targetVrs, Math.min(1, dt * 1.35));
+  } else if (drone.vrsSeverity > 0.01) {
+    // In Sport mode with deep VRS, mashing climb throttle without horizontal movement prolongs the vortex slightly;
+    // in Stabilized mode or with any horizontal airspeed, the flight controller sheds the wake smoothly.
+    if (isSport && ctrl.throttle > 0.1 && hSpeedPre < 2.5 && cyclicEscapeInput < 0.25 && agl > 4.5 && drone.vrsSeverity > 0.42) {
+      drone.vrsSeverity = THREE.MathUtils.lerp(drone.vrsSeverity, 0.58, Math.min(1, dt * 1.2));
+    } else {
+      const escapingHorizontally = hSpeedPre >= 2.8 || cyclicEscapeInput > 0.35 || agl <= 4.0;
+      const decayRate = escapingHorizontally ? 6.5 : 1.65;
+      drone.vrsSeverity = THREE.MathUtils.lerp(drone.vrsSeverity, 0, Math.min(1, dt * decayRate));
+      if (drone.vrsSeverity < 0.015) drone.vrsSeverity = 0;
+    }
+  } else {
+    drone.vrsSeverity = 0;
+  }
+  const vrs = drone.vrsSeverity;
 
-  // 3. Thrust & Drag
+  // 0.5 Pre-compute 3D Boundary-Layer Wind, Gust Envelope & Turbulence in World & Body Frames
   const fX = -Math.sin(drone.yaw);
   const fZ = -Math.cos(drone.yaw);
   const rX = Math.cos(drone.yaw);
   const rZ = -Math.sin(drone.yaw);
 
-  if (ctrl.brake) {
-    drone.vel.x *= Math.max(0, 1 - 6.5 * dt);
-    drone.vel.z *= Math.max(0, 1 - 6.5 * dt);
-    drone.vel.y *= Math.max(0, 1 - 6.5 * dt);
-  } else {
-    const accelMag = p.maxHorizontalAccel * boostMult;
-    drone.vel.x += (fX * ctrl.pitch + rX * ctrl.roll) * accelMag * dt;
-    drone.vel.z += (fZ * ctrl.pitch + rZ * ctrl.roll) * accelMag * dt;
-
-    drone.vel.x -= drone.vel.x * p.horizontalDrag * dt;
-    drone.vel.z -= drone.vel.z * p.horizontalDrag * dt;
-  }
-
-  // 4. Vertical Altitude Hold
-  if (Math.abs(ctrl.throttle) > 0.05) {
-    const targetVy = ctrl.throttle * p.maxClimbSpeed;
-    drone.vel.y += (targetVy - drone.vel.y) * Math.min(1, p.verticalAccel * 0.25 * dt);
-  } else {
-    drone.vel.y -= drone.vel.y * p.verticalDamping * dt;
-  }
-
-  // 5. Environmental Weather Dynamics & Forces
   const weatherEff = (typeof WEATHER_PROFILES !== 'undefined' && WEATHER_PROFILES[state.weather]) ? WEATHER_PROFILES[state.weather] : null;
-  if (weatherEff) {
-    const timeSec = performance.now() * 0.001;
-    // Gust oscillation
-    const gustOsc = Math.sin(timeSec * 1.5) * 0.35 + Math.cos(timeSec * 3.7) * 0.25;
-    const curWind = weatherEff.windSpeed + (gustOsc > 0 ? gustOsc * (weatherEff.gustSpeed - weatherEff.windSpeed) : 0);
-    const wAng = weatherEff.windAngle || 0.4;
-    const windForceX = Math.cos(wAng) * curWind * 0.38;
-    const windForceZ = Math.sin(wAng) * curWind * 0.38;
+  const shearMult = computeWindShearMultiplier(agl);
+  const airborneBlend = (agl > 0.12 || ctrl.throttle > 0.05) ? THREE.MathUtils.smoothstep(agl, 0.04, 0.70) : 0;
+  let meanWind = 0, gustDelta = 0, curWind = 0, turb = 0, wAng = 0.4;
+  let meanWindX = 0, meanWindZ = 0, gustWindX = 0, gustWindZ = 0;
+  let meanFwd = 0, meanRight = 0, gustFwd = 0, gustRight = 0;
 
-    // Turbulence perturbations
-    if (weatherEff.turbulence > 0) {
-      const turbX = (Math.sin(timeSec * 7.1) + Math.cos(timeSec * 11.3)) * weatherEff.turbulence * 0.28;
-      const turbZ = (Math.cos(timeSec * 8.3) + Math.sin(timeSec * 13.1)) * weatherEff.turbulence * 0.28;
-      drone.vel.x += turbX * dt;
-      drone.vel.z += turbZ * dt;
-      drone.roll += Math.sin(timeSec * 9.2) * weatherEff.turbulence * 0.02 * dt;
-      drone.pitch += Math.cos(timeSec * 8.7) * weatherEff.turbulence * 0.02 * dt;
+  if (weatherEff) {
+    meanWind = weatherEff.windSpeed * shearMult * airborneBlend;
+    const gustWave = Math.max(0, Math.sin(tNow * 1.15) * 0.45 + Math.cos(tNow * 2.35) * 0.35 + Math.sin(tNow * 3.95) * 0.20);
+    const gustSpread = Math.max(0, weatherEff.gustSpeed - weatherEff.windSpeed);
+    gustDelta = gustWave * gustSpread * shearMult * airborneBlend;
+    curWind = meanWind + gustDelta;
+    turb = weatherEff.turbulence * shearMult * airborneBlend;
+    wAng = (weatherEff.windAngle || 0.4) + (Math.sin(tNow * 0.85) * 0.14 + Math.cos(tNow * 1.95) * 0.08) * Math.min(1, turb * 1.2);
+
+    meanWindX = Math.cos(wAng) * meanWind;
+    meanWindZ = Math.sin(wAng) * meanWind;
+    gustWindX = Math.cos(wAng) * gustDelta;
+    gustWindZ = Math.sin(wAng) * gustDelta;
+
+    meanFwd = meanWindX * fX + meanWindZ * fZ;
+    meanRight = meanWindX * rX + meanWindZ * rZ;
+    gustFwd = gustWindX * fX + gustWindZ * fZ;
+    gustRight = gustWindX * rX + gustWindZ * rZ;
+  }
+
+  // 1. Yaw (scaled by payload rotational inertia + Crosswind Weathercocking Torque + VRS torque)
+  const vrsYawTwitch = vrs > 0.14
+    ? (Math.sin(tNow * 8.2) * 0.42 + Math.cos(tNow * 15.1) * 0.28) * vrs
+    : 0;
+  const weathercockYaw = -(meanRight * 0.008 + gustRight * 0.024) * THREE.MathUtils.clamp(curWind / 8.0, 0, 1.4) * inertiaScale;
+  const turbYaw = (Math.sin(tNow * 5.4) * 0.22 + Math.cos(tNow * 9.7) * 0.14) * turb * inertiaScale;
+  const yawAuthority = 1.0 - vrs * 0.28;
+  const targetYawRate = ctrl.yaw * p.yawMaxRate * inertiaScale * yawAuthority + weathercockYaw + turbYaw + vrsYawTwitch;
+  drone.yawRate += (targetYawRate - drone.yawRate) * Math.min(1, p.yawResponse * inertiaScale * dt);
+  drone.yaw += drone.yawRate * dt;
+
+  // 2. 2nd-Order Rotational Spring-Damper Attitude Dynamics (Pitch & Roll + Wind Lean + Blade-Flapping Gusts + VRS)
+  const vrsPitchBuffet = vrs > 0.12
+    ? (Math.sin(tNow * 10.4) * 0.075 + Math.cos(tNow * 18.7) * 0.052 + Math.sin(tNow * 27.1) * 0.028) * vrs
+    : 0;
+  const vrsRollBuffet = vrs > 0.12
+    ? (Math.cos(tNow * 9.8) * 0.092 + Math.sin(tNow * 17.9) * 0.064 + Math.cos(tNow * 25.8) * 0.032) * vrs
+    : 0;
+
+  // In Stabilized mode, flight controller leans INTO the mean wind (Wind-Compensation Crab Angle) to counter drift;
+  // sudden gusts induce rotor blade-flapping dihedral tilt (-gust) and eddy attitude perturbations.
+  const fcWindLeanPitch = isSport ? 0 : THREE.MathUtils.clamp(meanFwd * 0.0175, -0.23, 0.23);
+  const fcWindLeanRoll = isSport ? 0 : THREE.MathUtils.clamp(meanRight * 0.0175, -0.23, 0.23);
+  const windPitchPerturb = fcWindLeanPitch - gustFwd * 0.022 + (Math.sin(tNow * 6.3) * 0.052 + Math.cos(tNow * 11.4) * 0.034) * turb;
+  const windRollPerturb = fcWindLeanRoll - gustRight * 0.022 + (Math.cos(tNow * 5.8) * 0.058 + Math.sin(tNow * 10.9) * 0.038) * turb;
+
+  const cyclicAuthority = 1.0 - vrs * 0.25;
+  const targetPitch = (ctrl.brake ? fcWindLeanPitch : -ctrl.pitch * p.maxTiltAngle * cyclicAuthority + windPitchPerturb) + vrsPitchBuffet;
+  const targetRoll = (ctrl.brake ? fcWindLeanRoll : -ctrl.roll * p.maxTiltAngle * cyclicAuthority + windRollPerturb) + vrsRollBuffet;
+  const omegaN = p.tiltResponse * 2.15 * inertiaScale * (1.0 - vrs * 0.24);
+  const zeta = (isSport ? 0.76 : 0.88) * (1.0 - vrs * 0.28);
+  const attSubSteps = 2;
+  const subDt = Math.min(dt, 0.05) / attSubSteps;
+  for (let s = 0; s < attSubSteps; s++) {
+    const pitchAcc = (omegaN * omegaN) * (targetPitch - drone.pitch) - (2 * zeta * omegaN) * drone.pitchRate;
+    const rollAcc = (omegaN * omegaN) * (targetRoll - drone.roll) - (2 * zeta * omegaN) * drone.rollRate;
+    drone.pitchRate += pitchAcc * subDt;
+    drone.rollRate += rollAcc * subDt;
+    drone.pitch += drone.pitchRate * subDt;
+    drone.roll += drone.rollRate * subDt;
+  }
+  if (turb > 0.01) {
+    drone.pitchRate += (Math.cos(tNow * 8.7) * 1.35 + Math.sin(tNow * 14.9) * 0.85) * turb * inertiaScale * dt;
+    drone.rollRate += (Math.sin(tNow * 9.2) * 1.50 + Math.cos(tNow * 15.7) * 0.95) * turb * inertiaScale * dt;
+  }
+  if (vrs > 0.14) {
+    drone.rollRate += Math.sin(tNow * 21.3) * vrs * 1.85 * dt;
+    drone.pitchRate += Math.cos(tNow * 18.7) * vrs * 1.65 * dt;
+  }
+
+  // 3. Thrust-Vector Tilting Propulsion & Quadratic Airframe Drag
+  if (ctrl.brake) {
+    // Active aerodynamic flare braking
+    const brakeEff = 6.5 * inertiaScale * (1.0 - vrs * 0.35);
+    drone.vel.x *= Math.max(0, 1 - brakeEff * dt);
+    drone.vel.z *= Math.max(0, 1 - brakeEff * dt);
+    drone.vel.y *= Math.max(0, 1 - brakeEff * (1.0 - vrs * 0.45) * dt);
+  } else {
+    const maxTiltSin = Math.max(0.15, Math.sin(p.maxTiltAngle));
+    const tiltForward = THREE.MathUtils.clamp(-Math.sin(drone.pitch) / maxTiltSin, -1.25, 1.25);
+    const tiltRight = THREE.MathUtils.clamp(-Math.sin(drone.roll) / maxTiltSin, -1.25, 1.25);
+    const vrsThrustLoss = 1.0 - vrs * (cyclicEscapeInput < 0.2 ? 0.55 : 0.15);
+    const effPitchDrive = (tiltForward * 0.72 + ctrl.pitch * 0.28) * vrsThrustLoss;
+    const effRollDrive = (tiltRight * 0.72 + ctrl.roll * 0.28) * vrsThrustLoss;
+
+    const accelMag = (p.maxHorizontalAccel * boostMult) / Math.pow(drone.massRatio, 0.28);
+    drone.vel.x += (fX * effPitchDrive + rX * effRollDrive) * accelMag * dt;
+    drone.vel.z += (fZ * effPitchDrive + rZ * effRollDrive) * accelMag * dt;
+
+    // Subtle horizontal wake drift while inside VRS
+    if (vrs > 0.14) {
+      const vrsDriftX = (Math.sin(tNow * 5.3) * 1.8 + Math.cos(tNow * 11.7) * 1.1) * vrs;
+      const vrsDriftZ = (Math.cos(tNow * 6.1) * 1.8 + Math.sin(tNow * 12.9) * 1.1) * vrs;
+      drone.vel.x += vrsDriftX * dt;
+      drone.vel.z += vrsDriftZ * dt;
     }
 
-    // Horizontal wind force
+    // Linear rotor blade-flapping drag + quadratic parasitic frame drag
+    const hSpeed = Math.hypot(drone.vel.x, drone.vel.z);
+    const quadDrag = 0.012 * hSpeed;
+    const totalHDrag = p.horizontalDrag + quadDrag;
+    drone.vel.x -= drone.vel.x * totalHDrag * dt;
+    drone.vel.z -= drone.vel.z * totalHDrag * dt;
+  }
+
+  // 4. Vertical Lift, Flight-Controller Descent Envelope Protection, Ground Effect (IGE) & VRS Sink
+  drone.groundEffectFactor = computeGroundEffectFactor(agl);
+  const cosTilt = Math.max(0.45, Math.cos(drone.pitch) * Math.cos(drone.roll));
+  const tiltLossCompensation = state.flightMode === 'stabilized' ? 0.85 : 0.42;
+  const uncompensatedTiltDrop = (1.0 - cosTilt) * (1.0 - tiltLossCompensation) * 9.81;
+
+  if (Math.abs(ctrl.throttle) > 0.05) {
+    if (ctrl.throttle > 0) {
+      // Climbing: reduced efficiency if currently inside VRS wake
+      const climbEfficiency = (drone.groundEffectFactor / Math.pow(drone.massRatio, 0.25)) * (1.0 - vrs * 0.68);
+      const targetVy = ctrl.throttle * p.maxClimbSpeed * climbEfficiency;
+      const climbResp = p.verticalAccel * 0.25 * (1.0 - vrs * 0.52);
+      drone.vel.y += (targetVy - drone.vel.y) * Math.min(1, climbResp * dt);
+    } else {
+      // Descending: Flight controller blends between hoverDescentLimit (pure vertical) and maxDescentSpeed (oblique forward descent)
+      const cleanAirBlend = THREE.MathUtils.clamp(hSpeedPre / 4.2, 0, 1);
+      const allowedDescentSpeed = THREE.MathUtils.lerp(p.hoverDescentLimit, p.maxDescentSpeed, cleanAirBlend) * Math.pow(drone.massRatio, 0.18);
+      const targetVy = ctrl.throttle * (allowedDescentSpeed / drone.groundEffectFactor);
+      drone.vel.y += (targetVy - drone.vel.y) * Math.min(1, p.verticalAccel * 0.22 * dt);
+    }
+  } else {
+    // Auto-leveling altitude hold: sluggish vertical braking when inside VRS wake
+    const effectiveDamping = p.verticalDamping * drone.groundEffectFactor * Math.max(0.28, 1.0 - vrs * 0.65);
+    drone.vel.y -= drone.vel.y * effectiveDamping * dt;
+  }
+  // Downward wake suction inside VRS
+  if (vrs > 0.10) {
+    const vrsSinkPull = (3.4 + Math.sin(tNow * 16.5) * 1.4) * vrs;
+    drone.vel.y -= vrsSinkPull * dt;
+  }
+  // Apply high-G bank lift loss & subtle ground-effect buoyant cushion near terrain
+  drone.vel.y -= uncompensatedTiltDrop * dt;
+  if (drone.groundEffectFactor > 1.02 && drone.vel.y < 0) {
+    drone.vel.y *= Math.max(0, 1 - (drone.groundEffectFactor - 1.0) * 3.8 * dt);
+  }
+
+  // 5. Environmental Weather Translational Forces, Gust Drift & Vertical Wind Shear
+  if (weatherEff && airborneBlend > 0.001) {
+    const windMassScale = 1.0 / Math.pow(drone.massRatio, 0.30);
+    // In Stabilized mode, fcWindLean already generates ~0.96*meanWind of opposing rotor thrust;
+    // windAccel applies the full physical airmass drag (1.08*meanWind + 1.35*gustWind), resulting in
+    // realistic station-keeping crab in Stabilized mode and full downwind drift in unassisted Sport mode.
+    const windForceX = (meanWindX * 1.08 + gustWindX * 1.35) * windMassScale;
+    const windForceZ = (meanWindZ * 1.08 + gustWindZ * 1.35) * windMassScale;
     drone.vel.x += windForceX * dt;
     drone.vel.z += windForceZ * dt;
 
-    // Moisture drag resistance
+    // Translational turbulent eddies & vertical shear pockets
+    if (turb > 0) {
+      const turbX = (Math.sin(tNow * 7.1) * 0.65 + Math.cos(tNow * 11.3) * 0.35) * turb * 1.15 * windMassScale;
+      const turbZ = (Math.cos(tNow * 8.3) * 0.65 + Math.sin(tNow * 13.1) * 0.35) * turb * 1.15 * windMassScale;
+      const vertShear = (Math.sin(tNow * 4.6) * 0.58 + Math.cos(tNow * 8.9) * 0.42) * turb * 1.35 * windMassScale;
+      drone.vel.x += turbX * dt;
+      drone.vel.z += turbZ * dt;
+      drone.vel.y += vertShear * dt;
+    }
+
+    // Moisture & high-density rain drag resistance
     if (weatherEff.dragMult > 1.0) {
-      const extraDrag = (weatherEff.dragMult - 1.0) * 0.85;
+      const extraDrag = (weatherEff.dragMult - 1.0) * 0.85 * airborneBlend;
       drone.vel.x -= drone.vel.x * extraDrag * dt;
       drone.vel.z -= drone.vel.z * extraDrag * dt;
     }
 
-    // Rain downdraft aerodynamic weight
+    // Rain downdraft aerodynamic weight (partially compensated by altitude-hold PID in Stabilized mode)
     if (weatherEff.downforce > 0) {
-      drone.vel.y -= weatherEff.downforce * dt;
+      const downforceFactor = isSport ? 1.0 : 0.48;
+      drone.vel.y -= weatherEff.downforce * downforceFactor * airborneBlend * dt;
     }
   }
 
   drone.collisionCooldown = Math.max(0, drone.collisionCooldown - dt);
-  const inWilderness = state.gameMode === 'tactical_strike';
   if (inWilderness) {
     tacticalTargetColliders.length = 0;
     for (const target of tacticalState.targets) {
@@ -6712,20 +9376,28 @@ const smoothCamPos = new THREE.Vector3(0, 3.3, 6.8);
 const smoothLookAt = new THREE.Vector3(0, 2.1, -16);
 
 function updateCameraAndWorldAnimations(dt) {
-  // 1. Camera Follow / FPV
+  updateShadowFrustum();
+  updateTreeWind(dt);
+  // 1. Camera Follow / FPV / 3-Axis Gimbal Nadir (with subtle VRS propwash vibration)
   const fX = -Math.sin(drone.yaw);
   const fZ = -Math.cos(drone.yaw);
+  const vrs = drone.vrsSeverity || 0;
+  const tShake = performance.now() * 0.001;
+  const shakeX = vrs > 0.12 ? (Math.sin(tShake * 27.3) * 0.048 + Math.cos(tShake * 41.7) * 0.028) * vrs : 0;
+  const shakeY = vrs > 0.12 ? (Math.cos(tShake * 31.1) * 0.042 + Math.sin(tShake * 47.9) * 0.024) * vrs : 0;
+  const shakeZ = vrs > 0.12 ? (Math.sin(tShake * 23.9) * 0.048 + Math.cos(tShake * 37.3) * 0.028) * vrs : 0;
+  const shakeRoll = vrs > 0.12 ? (Math.sin(tShake * 21.5) * 0.014 + Math.cos(tShake * 35.1) * 0.008) * vrs : 0;
 
   if (state.cameraMode === 'chase') {
     const targetCam = new THREE.Vector3(
-      drone.pos.x - fX * 6.8,
-      drone.pos.y + 2.1,
-      drone.pos.z - fZ * 6.8
+      drone.pos.x - fX * 6.8 + shakeX,
+      drone.pos.y + 2.1 + shakeY,
+      drone.pos.z - fZ * 6.8 + shakeZ
     );
     const targetLook = new THREE.Vector3(
-      drone.pos.x + fX * 16.0,
-      drone.pos.y + 0.9,
-      drone.pos.z + fZ * 16.0
+      drone.pos.x + fX * 16.0 - shakeX * 1.2,
+      drone.pos.y + 0.9 - shakeY * 1.2,
+      drone.pos.z + fZ * 16.0 - shakeZ * 1.2
     );
 
     smoothCamPos.lerp(targetCam, Math.min(1, 9.5 * dt));
@@ -6733,18 +9405,20 @@ function updateCameraAndWorldAnimations(dt) {
 
     camera.position.copy(smoothCamPos);
     camera.lookAt(smoothLookAt);
+    if (vrs > 0.12) camera.rotation.z += shakeRoll;
     playerDroneMesh.root.visible = true;
   } else if (state.cameraMode === 'down') {
-    camera.position.set(drone.pos.x, drone.pos.y, drone.pos.z);
-    camera.rotation.set(-Math.PI / 2, drone.yaw, 0, 'YXZ');
+    // 3-Axis Gyro-Stabilized EO/IR Targeting Pod: isolates 85%+ of airframe roll/pitch vibration
+    camera.position.set(drone.pos.x + shakeX * 0.25, drone.pos.y + shakeY * 0.2, drone.pos.z + shakeZ * 0.25);
+    camera.rotation.set(-Math.PI / 2 + shakeY * 0.12, drone.yaw + shakeRoll * 0.25, shakeRoll * 0.3, 'YXZ');
     playerDroneMesh.root.visible = false;
   } else {
-    // FPV View
-    camera.position.set(drone.pos.x + fX * 0.8, drone.pos.y + 0.06, drone.pos.z + fZ * 0.8);
+    // FPV View (hard-mounted nose camera shows airframe attitude + subtle high-freq vibration)
+    camera.position.set(drone.pos.x + fX * 0.8 + shakeX * 0.25, drone.pos.y + 0.06 + shakeY * 0.25, drone.pos.z + fZ * 0.8 + shakeZ * 0.25);
     camera.rotation.order = 'YXZ';
-    camera.rotation.y = drone.yaw;
-    camera.rotation.x = drone.pitch * 0.65;
-    camera.rotation.z = drone.roll * 0.55;
+    camera.rotation.y = drone.yaw + shakeRoll * 0.3;
+    camera.rotation.x = drone.pitch * 0.65 + shakeY * 0.08;
+    camera.rotation.z = drone.roll * 0.55 + shakeRoll * 0.6;
     playerDroneMesh.root.visible = false;
   }
 
@@ -6974,6 +9648,22 @@ function updateHUD(dt) {
   document.getElementById('bar-altitude').style.width = `${Math.min(100, (agl / PHYSICS.maxAltitude) * 100)}%`;
 
   document.getElementById('hud-vspeed').textContent = drone.vel.y.toFixed(1);
+  const throttleStateEl = document.getElementById('hud-throttle-state');
+  if (throttleStateEl) {
+    if (drone.vrsSeverity > 0.25) {
+      throttleStateEl.textContent = '渦環亂流 VRS';
+      throttleStateEl.style.color = '#ef4444';
+    } else if (drone.groundEffectFactor > 1.04) {
+      throttleStateEl.textContent = `地面效應 IGE +${Math.round((drone.groundEffectFactor - 1) * 100)}%`;
+      throttleStateEl.style.color = '#10b981';
+    } else if (isTactical && tacticalState.bombsRemaining > 0) {
+      throttleStateEl.textContent = `掛載 +${(tacticalState.bombsRemaining * 1.6).toFixed(1)}kg`;
+      throttleStateEl.style.color = '#cbd5e1';
+    } else {
+      throttleStateEl.textContent = state.flightMode === 'sport' ? '運動手動' : '自動定高';
+      throttleStateEl.style.color = '';
+    }
+  }
   const pitchDeg = Math.round((-drone.pitch * 180) / Math.PI);
   const rollDeg = Math.round((-drone.roll * 180) / Math.PI);
   document.getElementById('hud-attitude').textContent = `P: ${pitchDeg}° / R: ${rollDeg}°`;
@@ -7024,10 +9714,10 @@ function updateHUD(dt) {
       }
     }
 
-    // Dynamic wind deflection vector on reticle
+    // Dynamic wind deflection vector on reticle (with altitude wind shear)
     const w = (typeof WEATHER_PROFILES !== 'undefined' && WEATHER_PROFILES[state.weather]) ? WEATHER_PROFILES[state.weather] : null;
     if (w) {
-      const curWind = w.windSpeed || 0;
+      const curWind = (w.windSpeed || 0) * computeWindShearMultiplier(agl);
       const wAng = w.windAngle || 0.4;
       const wx = Math.cos(wAng) * curWind;
       const wz = Math.sin(wAng) * curWind;
@@ -7518,8 +10208,9 @@ function setSensorMode(mode) {
 
 
   applyTimeOfDay(state.timeOfDay);
-  for (const tank of tacticalState.tanks) {
-    updateTankThermalSignature(tank,state.elapsedTime);
+  for (const t of tacticalState.targets) {
+    if (t.type === 'tank') updateTankThermalSignature(t, state.elapsedTime);
+    else if (t.type === 'radar' && t.thermal) updateRadarThermalSignature(t, state.elapsedTime);
   }
 
   audioEngine.playIRCutClick();
@@ -7536,6 +10227,7 @@ let vtxCanvas = null;
 let vtxCtx = null;
 let vtxNoiseCanvas = null;
 let vtxNoisePattern = null;
+let nvgNoisePatterns = [];
 
 function initVTXOverlay() {
   vtxCanvas = document.getElementById('vtx-overlay-canvas');
@@ -7556,6 +10248,29 @@ function initVTXOverlay() {
   }
   nCtx.putImageData(imgData, 0, 0);
   vtxNoisePattern = vtxCtx.createPattern(vtxNoiseCanvas, 'repeat');
+
+  // Multi-frame high-frequency dynamic scintillation noise for real Gen 2/3 NVG
+  nvgNoisePatterns = [];
+  for (let f = 0; f < 4; f++) {
+    const nvgC = document.createElement('canvas');
+    nvgC.width = nvgC.height = 128;
+    const nvgCtx = nvgC.getContext('2d');
+    const nvgData = nvgCtx.createImageData(128, 128);
+    for (let i = 0; i < nvgData.data.length; i += 4) {
+      const spark = Math.random();
+      if (spark < 0.48) {
+        const bright = 135 + Math.random() * 120;
+        nvgData.data[i] = Math.round(bright * 0.65);      // R
+        nvgData.data[i + 1] = Math.round(bright);          // G (Phosphor green)
+        nvgData.data[i + 2] = Math.round(bright * 0.60);   // B
+        nvgData.data[i + 3] = Math.round(75 + Math.random() * 165);
+      } else {
+        nvgData.data[i + 3] = 0;
+      }
+    }
+    nvgCtx.putImageData(nvgData, 0, 0);
+    nvgNoisePatterns.push(vtxCtx.createPattern(nvgC, 'repeat'));
+  }
 }
 
 function updateVTXOverlay(dt) {
@@ -7574,54 +10289,72 @@ function updateVTXOverlay(dt) {
 
   vtxCtx.clearRect(0, 0, w, h);
 
-  // 1. Dynamic Optical Lens Vignette
-  const cx = w * 0.5;
-  const cy = h * 0.5;
-  const maxR = Math.max(w, h) * 0.72;
-  const minR = Math.min(w, h) * (state.cameraMode === 'down' ? (state.downZoom === 4 ? 0.22 : (state.downZoom === 2 ? 0.28 : 0.36)) : 0.35);
+  // 1. In Chase (Third-Person) mode, keep the view completely clean (external camera, no onboard VTX overlays)
+  if (state.cameraMode !== 'chase') {
+    // Dynamic Optical Lens Vignette for onboard lenses
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const maxR = Math.max(w, h) * 0.72;
+    const minR = Math.min(w, h) * (state.cameraMode === 'down' ? (state.downZoom === 4 ? 0.22 : (state.downZoom === 2 ? 0.28 : 0.36)) : 0.35);
 
-  let vignetteOpacity = 0.35;
-  if (state.cameraMode === 'down') {
-    vignetteOpacity = state.downZoom === 4 ? 0.78 : (state.downZoom === 2 ? 0.58 : 0.45);
-  } else if (state.cameraMode === 'fpv') {
-    vignetteOpacity = 0.42;
+    let vignetteOpacity = 0.30;
+    if (state.cameraMode === 'down') {
+      vignetteOpacity = state.downZoom === 4 ? 0.75 : (state.downZoom === 2 ? 0.55 : 0.40);
+    } else if (state.cameraMode === 'fpv') {
+      vignetteOpacity = 0.35;
+    }
+
+    const vigGrad = vtxCtx.createRadialGradient(cx, cy, minR, cx, cy, maxR);
+    vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vigGrad.addColorStop(1, `rgba(4, 9, 18, ${vignetteOpacity})`);
+    vtxCtx.fillStyle = vigGrad;
+    vtxCtx.fillRect(0, 0, w, h);
+
+    // High-Zoom Circular Lens Barrel Mask for 4X Optic
+    if (state.cameraMode === 'down' && state.downZoom === 4) {
+      vtxCtx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+      vtxCtx.lineWidth = 2.5;
+      vtxCtx.beginPath();
+      vtxCtx.arc(cx, cy, Math.min(w, h) * 0.46, 0, Math.PI * 2);
+      vtxCtx.stroke();
+    }
+
+    // 2. Sensor Noise & Grain (Only active in Night Vision & FLIR; Visible RGB is clean HD digital feed)
+    if (state.sensorMode === 'nvg') {
+      // Military NVG Eyepiece Circular Iris Vignette
+      const nvgTubeGrad = vtxCtx.createRadialGradient(cx, cy, Math.min(w, h) * 0.44, cx, cy, Math.max(w, h) * 0.72);
+      nvgTubeGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      nvgTubeGrad.addColorStop(0.68, 'rgba(4, 20, 11, 0.22)');
+      nvgTubeGrad.addColorStop(1, 'rgba(1, 8, 4, 0.75)');
+      vtxCtx.fillStyle = nvgTubeGrad;
+      vtxCtx.fillRect(0, 0, w, h);
+
+      // Dynamic Phosphor Scintillation (Boiling electron snow)
+      if (nvgNoisePatterns.length) {
+        const nvgFrame = (Math.floor(performance.now() * 0.045) + ((Math.random() * 2) | 0)) % nvgNoisePatterns.length;
+        vtxCtx.save();
+        vtxCtx.globalAlpha = 0.20;
+        const ox = (Math.random() * 128) | 0;
+        const oy = (Math.random() * 128) | 0;
+        vtxCtx.translate(ox, oy);
+        vtxCtx.fillStyle = nvgNoisePatterns[nvgFrame];
+        vtxCtx.fillRect(-ox, -oy, w + 128, h + 128);
+        vtxCtx.restore();
+      }
+    } else if (state.sensorMode === 'flir_white') {
+      // Subtle Microbolometer Fixed Pattern Noise (FPN)
+      if (vtxNoisePattern) {
+        vtxCtx.save();
+        vtxCtx.globalAlpha = 0.05;
+        const ox = (Math.random() * 64) | 0;
+        const oy = (Math.random() * 64) | 0;
+        vtxCtx.translate(ox, oy);
+        vtxCtx.fillStyle = vtxNoisePattern;
+        vtxCtx.fillRect(-ox, -oy, w + 64, h + 64);
+        vtxCtx.restore();
+      }
+    }
   }
-
-  const vigGrad = vtxCtx.createRadialGradient(cx, cy, minR, cx, cy, maxR);
-  vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  vigGrad.addColorStop(1, `rgba(4, 9, 18, ${vignetteOpacity})`);
-  vtxCtx.fillStyle = vigGrad;
-  vtxCtx.fillRect(0, 0, w, h);
-
-  // 2. High-Zoom Circular Lens Barrel Mask for 4X Optic
-  if (state.cameraMode === 'down' && state.downZoom === 4) {
-    vtxCtx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
-    vtxCtx.lineWidth = 2.5;
-    vtxCtx.beginPath();
-    vtxCtx.arc(cx, cy, Math.min(w, h) * 0.46, 0, Math.PI * 2);
-    vtxCtx.stroke();
-  }
-
-  // 3. Sensor Noise & Video Link Grain (Enhanced in FLIR and NVG)
-  let noiseAlpha = 0.03;
-  if (state.sensorMode === 'flir_white') noiseAlpha = 0.07;
-  else if (state.sensorMode === 'nvg') noiseAlpha = 0.09;
-
-  if (vtxNoisePattern) {
-    vtxCtx.save();
-    vtxCtx.globalAlpha = noiseAlpha;
-    const ox = (Math.random() * 64) | 0;
-    const oy = (Math.random() * 64) | 0;
-    vtxCtx.translate(ox, oy);
-    vtxCtx.fillStyle = vtxNoisePattern;
-    vtxCtx.fillRect(-ox, -oy, w + 64, h + 64);
-    vtxCtx.restore();
-  }
-
-  // 4. Faint Rolling Analog Scanline
-  const scanY = (performance.now() * 0.12) % h;
-  vtxCtx.fillStyle = state.sensorMode === 'nvg' ? 'rgba(52, 211, 153, 0.05)' : 'rgba(255, 255, 255, 0.03)';
-  vtxCtx.fillRect(0, scanY, w, 2.5);
 
   // 5. Update Dynamic OSD Telemetry
   const latSec = (42.0 + Math.abs(drone.pos.z * 0.025)).toFixed(1);
@@ -7827,8 +10560,32 @@ async function startRunSequence(playerNum = 1) {
     // Reset all targets
     tacticalState.targets.forEach((t) => {
       t.destroyed = false;
-      if (t.thermal) updateTankThermalSignature(t,0);
+      t.coasting = false;
+      t.coastSpeed = 0;
+      t.trackDamaged = false;
+      if (t.baseSpeed) t.patrolSpeed = t.baseSpeed;
+      if (t.thermal) {
+        if (t.type === 'tank') updateTankThermalSignature(t, 0);
+        else if (t.type === 'radar') updateRadarThermalSignature(t, 0);
+      }
       t.hp = t.maxHp;
+      if (t.wreckFire && (t.type === 'radar' || t.type === 'ammo')) {
+        if (t.wreckFire.group && t.wreckFire.group.parent) {
+          t.wreckFire.group.parent.remove(t.wreckFire.group);
+        }
+        t.wreckFire = null;
+        t.mesh.traverse((child) => {
+          if (!child.isMesh || !child.material) return;
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((m) => {
+            if (m && m.userData?.wreckScorched) {
+              if (typeof m.userData.origHex === 'number') m.color.setHex(m.userData.origHex);
+              if (typeof m.userData.origRough === 'number') m.roughness = m.userData.origRough;
+              m.userData.wreckScorched = false;
+            }
+          });
+        });
+      }
       if (t.type === 'ammo') t.mesh.children.forEach(part => { part.visible = true; });
       if (t.dish) t.dish.visible = true;
       if (t.armorMat) t.armorMat.color.setHex(0xffffff);
@@ -8315,6 +11072,8 @@ function unloadWildernessWorld() {
   tacticalState.targets.length = 0;
   tacticalState.tanks.length = 0;
   wildernessTerrainPositions = null;
+  wildernessLandMat = null;
+  wildernessRoadMat = null;
   wildernessColliders.length = 0;
   wildernessColliderCells.clear();
   tacticalTargetColliders.length = 0;
@@ -8418,6 +11177,14 @@ function animate(now) {
 
   if (typeof updateRain === 'function') {
     updateRain(dt);
+  }
+
+  if (skyDomeMesh && skyDomeMesh.material && skyDomeMesh.material.uniforms && skyDomeMesh.material.uniforms.cloudOffset) {
+    const w = WEATHER_PROFILES[state.weather];
+    const windSpd = w ? Math.max(0.8, w.windSpeed) : 1.0;
+    const windAng = w ? (w.windAngle || 0) : 0.4;
+    skyDomeMesh.material.uniforms.cloudOffset.value.x += Math.cos(windAng) * windSpd * 0.0085 * dt;
+    skyDomeMesh.material.uniforms.cloudOffset.value.y += Math.sin(windAng) * windSpd * 0.0085 * dt;
   }
 
   if (typeof updateVTXOverlay === 'function') {
