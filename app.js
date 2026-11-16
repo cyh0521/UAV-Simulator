@@ -89,7 +89,26 @@ const drone = {
   massRatio: 1.0,
   radius: 1.15,
   collisionCooldown: 0,
-  rotorAngle: 0
+  rotorAngle: 0,
+  crashed: false,
+  crashState: 'none', // 'none' | 'tumbling' | 'settled'
+  crashCause: '',
+  crashSpeed: 0,
+  tumbleTimer: 0,
+  tumbleSpinX: 0,
+  tumbleSpinY: 0,
+  tumbleSpinZ: 0,
+  battery: {
+    capacityMah: 6000,
+    remainingMah: 6000,
+    percent: 100,
+    openCircuitVoltage: 25.20,
+    voltage: 25.20,
+    currentAmps: 0.8,
+    internalResistance: 0.024,
+    lowBattWarned: false,
+    critBattWarned: false
+  }
 };
 
 const PHYSICS = {
@@ -121,7 +140,7 @@ const PHYSICS = {
     yawResponse: 11.5,
     boostMultiplier: 1.6
   },
-  maxAltitude: 120.0
+  maxAltitude: 1500.0
 };
 
 // ============================================================================
@@ -189,7 +208,8 @@ window.addEventListener('keydown', (e) => {
       return;
     }
     if (e.code === 'KeyR') {
-      respawnAtLastCheckpoint(false);
+      const wasCrashed = !!drone.crashed;
+      respawnAtLastCheckpoint(wasCrashed);
       return;
     }
     if (e.code === 'KeyZ') {
@@ -329,6 +349,53 @@ class DroneAudioEngine {
   setMuted(muted) {
     if (!this.initialized || !this.masterGain) return;
     this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.14, this.ctx.currentTime, 0.05);
+  }
+
+  _ensureMenuCtxRunning() {
+    if (!state.audioEnabled) return false;
+    this.init();
+    if (!this.ctx) return false;
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    return this.ctx.state === 'running';
+  }
+
+  playMenuHover() {
+    if (!this._ensureMenuCtxRunning()) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1240, now);
+      osc.frequency.exponentialRampToValueAtTime(1580, now + 0.04);
+      g.gain.setValueAtTime(0.04, now);
+      g.gain.exponentialRampToValueAtTime(0.0008, now + 0.045);
+      osc.connect(g);
+      g.connect(this.ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.05);
+    } catch (e) {}
+  }
+
+  playMenuConfirm() {
+    if (!this._ensureMenuCtxRunning()) return;
+    try {
+      const now = this.ctx.currentTime;
+      [880, 1318.51].forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(f, now + i * 0.055);
+        g.gain.setValueAtTime(0.08, now + i * 0.055);
+        g.gain.exponentialRampToValueAtTime(0.0008, now + i * 0.055 + 0.14);
+        osc.connect(g);
+        g.connect(this.ctx.destination);
+        osc.start(now + i * 0.055);
+        osc.stop(now + i * 0.055 + 0.15);
+      });
+    } catch (e) {}
   }
 
   playTone(freq = 880, duration = 0.12, type = 'sine', secondFreq = null) {
@@ -496,6 +563,59 @@ class DroneAudioEngine {
 
   playCollisionAlert() {
     this.playTone(180, 0.24, 'sawtooth', 130);
+  }
+
+  playCrashShatter() {
+    if (!state.audioEnabled || !this.ctx) return;
+    try {
+      const now = this.ctx.currentTime;
+      // 1. Violent low-end impact crunch / thud
+      const sub = this.ctx.createOscillator();
+      const subGain = this.ctx.createGain();
+      sub.type = 'sawtooth';
+      sub.frequency.setValueAtTime(140, now);
+      sub.frequency.exponentialRampToValueAtTime(28, now + 0.35);
+      subGain.gain.setValueAtTime(0.85, now);
+      subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      sub.connect(subGain);
+      subGain.connect(this.ctx.destination);
+      sub.start(now);
+      sub.stop(now + 0.36);
+
+      // 2. High-speed noise shatter / debris crunch
+      const bufLen = Math.floor(this.ctx.sampleRate * 0.45);
+      const buf = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufLen; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufLen * 0.22));
+      }
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buf;
+      const nGain = this.ctx.createGain();
+      nGain.gain.setValueAtTime(0.75, now);
+      nGain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1800, now);
+      filter.Q.value = 1.2;
+      noise.connect(filter);
+      filter.connect(nGain);
+      nGain.connect(this.ctx.destination);
+      noise.start(now);
+
+      // 3. High pitch motor stall chirp
+      const chirp = this.ctx.createOscillator();
+      const cGain = this.ctx.createGain();
+      chirp.type = 'triangle';
+      chirp.frequency.setValueAtTime(1200, now);
+      chirp.frequency.exponentialRampToValueAtTime(160, now + 0.25);
+      cGain.gain.setValueAtTime(0.35, now);
+      cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      chirp.connect(cGain);
+      cGain.connect(this.ctx.destination);
+      chirp.start(now);
+      chirp.stop(now + 0.26);
+    } catch (e) {}
   }
 
   playFinishFanfare() {
@@ -3582,6 +3702,9 @@ const WEATHER_PROFILES = {
     rainCount: 0,
     fogDensityBonus: 0.0,
     lightScale: 1.0,
+    sunScale: 1.0,
+    hemiScale: 1.0,
+    shadowRadius: 1.0,
     difficulty: '平穩良好'
   },
   cloudy: {
@@ -3598,6 +3721,9 @@ const WEATHER_PROFILES = {
     rainCount: 0,
     fogDensityBonus: 0.0006,
     lightScale: 0.88,
+    sunScale: 0.16,
+    hemiScale: 1.48,
+    shadowRadius: 3.8,
     difficulty: '微有擾動'
   },
   drizzle: {
@@ -3615,6 +3741,9 @@ const WEATHER_PROFILES = {
     rainSpeed: 20,
     fogDensityBonus: 0.0012,
     lightScale: 0.82,
+    sunScale: 0.08,
+    hemiScale: 1.28,
+    shadowRadius: 4.8,
     difficulty: '微下沉/易推漂'
   },
   heavy_rain: {
@@ -3632,6 +3761,9 @@ const WEATHER_PROFILES = {
     rainSpeed: 32,
     fogDensityBonus: 0.0028,
     lightScale: 0.68,
+    sunScale: 0.002,
+    hemiScale: 0.95,
+    shadowRadius: 5.5,
     difficulty: '下沉氣流/強陣風'
   },
   fog: {
@@ -3648,6 +3780,9 @@ const WEATHER_PROFILES = {
     rainCount: 0,
     fogDensityBonus: 0.012,
     lightScale: 0.85,
+    sunScale: 0.0001,
+    hemiScale: 1.35,
+    shadowRadius: 6.0,
     difficulty: '視距極低/阻力大'
   },
   typhoon: {
@@ -3665,6 +3800,9 @@ const WEATHER_PROFILES = {
     rainSpeed: 40,
     fogDensityBonus: 0.0035,
     lightScale: 0.55,
+    sunScale: 0.001,
+    hemiScale: 0.72,
+    shadowRadius: 6.0,
     difficulty: '極度惡劣/急下墜'
   }
 };
@@ -4154,14 +4292,21 @@ function applyTimeOfDay(mode) {
     scene.fog.far = (w && w.id === 'fog') ? 140 : Math.max(160, 1120 / (1 + fogDensityBonus * 350));
   }
 
+  const sunScale = (w && typeof w.sunScale === 'number') ? w.sunScale : weatherLightScale;
+  const hemiScale = (w && typeof w.hemiScale === 'number') ? w.hemiScale : 1.0;
+  const shadowRadius = (w && typeof w.shadowRadius === 'number') ? w.shadowRadius : 1.0;
+
   dirLight.color.setHex(p.sunColor);
-  dirLight.intensity = p.sunIntensity * weatherLightScale;
+  dirLight.intensity = p.sunIntensity * sunScale;
+  if (dirLight.shadow) {
+    dirLight.shadow.radius = shadowRadius;
+  }
   currentSunOffset.set(...p.sunPos);
   updateShadowFrustum();
 
   hemiLight.color.setHex(effHemiSky);
   hemiLight.groundColor.setHex(p.hemiGround);
-  hemiLight.intensity = p.hemiIntensity * THREE.MathUtils.lerp(1.0, 0.78, wa.skyBlend);
+  hemiLight.intensity = p.hemiIntensity * hemiScale;
 
   // Wet-surface specular sheen on terrain & roads during rainy weather
   const isWet = w && (w.id === 'drizzle' || w.id === 'heavy_rain' || w.id === 'typhoon');
@@ -4207,7 +4352,7 @@ function applyTimeOfDay(mode) {
       skyDomeMesh.material.uniforms.cloudCoverage.value = 0.0;
     }
   } else {
-    const iblSunStrength = mode === 'night' ? 0.08 : wa.mieMult;
+    const iblSunStrength = mode === 'night' ? 0.08 : (wa.mieMult * sunScale);
     scene.environment = getProceduralEnvMap(
       `${mode}_${weatherId}_${nightVision ? 'nvg' : 'vis'}`,
       nightVision ? 0x16261c : effSkyTop,
@@ -4414,7 +4559,7 @@ function buildCourseGates() {
 }
 
 function updateGateVisualStates() {
-  const isTraining = state.gameMode === 'training' || state.gameMode === 'single_race';
+  const isTraining = state.gameMode === 'training';
 
   if (trainingHoverRingGroup) {
     trainingHoverRingGroup.visible = isTraining && state.raceActive && state.trainingStep === 1;
@@ -4475,6 +4620,33 @@ let bellyBombMeshes = [];
 let ccipMarkerMesh = null;
 let ccipMarkerMat = null;
 let ccipLineMat = null;
+
+function drawPristineTankCamouflage(camouflage, paint, colorHex) {
+  paint.fillStyle = `#${colorHex.toString(16).padStart(6,'0')}`;
+  paint.fillRect(0,0,256,256);
+  const patches = [
+    ['#777154',-12,34,68,28,.6], ['#777154',146,134,79,34,-.35],
+    ['#777154',235,230,52,27,.24], ['#2e342d',92,15,64,19,-.48],
+    ['#2e342d',44,163,55,22,.62], ['#30362d',206,184,56,20,-.57]
+  ];
+  for (const [color,x,y,width,height,angle] of patches) {
+    paint.fillStyle = color;
+    for (const dx of [-256,0,256]) {
+      for (const dy of [-256,0,256]) {
+        paint.save();
+        paint.translate(x+dx,y+dy);
+        paint.rotate(angle);
+        paint.beginPath();
+        paint.moveTo(-width,0);
+        paint.bezierCurveTo(-width,-height,-width*.1,-height*.4,width*.2,-height);
+        paint.bezierCurveTo(width*.9,-height*1.2,width,height*.14,width*.67,height*.65);
+        paint.bezierCurveTo(width*.3,height,-width*.73,height*1.17,-width,0);
+        paint.fill();
+        paint.restore();
+      }
+    }
+  }
+}
 
 function createTankMesh(colorHex, number) {
   const root = new THREE.Group();
@@ -4582,30 +4754,7 @@ function createTankMesh(colorHex, number) {
   const camouflage = document.createElement('canvas');
   camouflage.width = camouflage.height = 256;
   const paint = camouflage.getContext('2d');
-  paint.fillStyle = `#${colorHex.toString(16).padStart(6,'0')}`;
-  paint.fillRect(0,0,256,256);
-  const patches = [
-    ['#777154',-12,34,68,28,.6], ['#777154',146,134,79,34,-.35],
-    ['#777154',235,230,52,27,.24], ['#2e342d',92,15,64,19,-.48],
-    ['#2e342d',44,163,55,22,.62], ['#30362d',206,184,56,20,-.57]
-  ];
-  for (const [color,x,y,width,height,angle] of patches) {
-    paint.fillStyle = color;
-    for (const dx of [-256,0,256]) {
-      for (const dy of [-256,0,256]) {
-        paint.save();
-        paint.translate(x+dx,y+dy);
-        paint.rotate(angle);
-        paint.beginPath();
-        paint.moveTo(-width,0);
-        paint.bezierCurveTo(-width,-height,-width*.1,-height*.4,width*.2,-height);
-        paint.bezierCurveTo(width*.9,-height*1.2,width,height*.14,width*.67,height*.65);
-        paint.bezierCurveTo(width*.3,height,-width*.73,height*1.17,-width,0);
-        paint.fill();
-        paint.restore();
-      }
-    }
-  }
+  drawPristineTankCamouflage(camouflage, paint, colorHex);
   const camouflageTexture = new THREE.CanvasTexture(camouflage);
   camouflageTexture.encoding = THREE.sRGBEncoding;
   camouflageTexture.wrapS = camouflageTexture.wrapT = THREE.RepeatWrapping;
@@ -4908,6 +5057,7 @@ function createTankMesh(colorHex, number) {
     emberHotCore,
     engineBreachWell,
     damageGroup,
+    colorHex,
     camouflageCanvas: camouflage,
     camouflageCtx: paint,
     camouflageTexture,
@@ -6609,7 +6759,9 @@ function* buildWildernessBattlefield() {
     patrolDir: 1,
     patrolSpeed: 7.2,
     baseSpeed: 7.2,
-    trackDamaged: false
+    trackDamaged: false,
+    spawnPos: tankA.root.position.clone(),
+    spawnDir: 1
   };
   tacticalState.targets.push(targetTankA);
   tacticalState.tanks.push(targetTankA);
@@ -6646,7 +6798,9 @@ function* buildWildernessBattlefield() {
     patrolDir: -1,
     patrolSpeed: 6.5,
     baseSpeed: 6.5,
-    trackDamaged: false
+    trackDamaged: false,
+    spawnPos: tankB.root.position.clone(),
+    spawnDir: -1
   };
   tacticalState.targets.push(targetTankB);
   tacticalState.tanks.push(targetTankB);
@@ -6748,6 +6902,35 @@ function computeGroundEffectFactor(agl) {
   if (agl >= 3.4) return 1.0;
   const zRatio = 1.85 / (4.0 * Math.max(0.55, agl));
   return THREE.MathUtils.clamp(1.0 / (1.0 - zRatio * zRatio), 1.0, 1.28);
+}
+
+// 6S Lithium-Polymer (LiPo) Open-Circuit Voltage Discharge Curve
+function computeOpenCircuitVoltage6S(soc) {
+  soc = THREE.MathUtils.clamp(soc, 0, 1);
+  if (soc > 0.80) {
+    // 80% to 100%: 23.40V to 25.20V (upper plateau, ~3.90V to 4.20V/cell)
+    const t = (soc - 0.80) / 0.20;
+    return 23.40 + Math.pow(t, 0.85) * 1.80;
+  } else if (soc > 0.20) {
+    // 20% to 80%: 21.60V to 23.40V (flat linear discharge plateau, ~3.60V to 3.90V/cell)
+    const t = (soc - 0.20) / 0.60;
+    return 21.60 + t * 1.80;
+  } else {
+    // 0% to 20%: 19.50V to 21.60V (knee cliff drop, ~3.25V to 3.60V/cell)
+    const t = soc / 0.20;
+    return 19.50 + Math.pow(t, 0.65) * 2.10;
+  }
+}
+
+function resetDroneBattery() {
+  if (!drone.battery) return;
+  drone.battery.remainingMah = drone.battery.capacityMah;
+  drone.battery.percent = 100;
+  drone.battery.openCircuitVoltage = 25.20;
+  drone.battery.voltage = 25.20;
+  drone.battery.currentAmps = 0.8;
+  drone.battery.lowBattWarned = false;
+  drone.battery.critBattWarned = false;
 }
 
 function sampleCanopyBallisticDrag(px, py, pz) {
@@ -8428,8 +8611,12 @@ function updateCCIP() {
       const halfFovRad = (curFov * Math.PI / 180) * 0.5;
       const scale = 180 / (alt * Math.tan(halfFovRad));
 
-      const rawSvgX = relRight * scale;
-      const rawSvgY = -relForward * scale;
+      // Compensate for optical pod transient pitch and roll
+      const effForward = relForward - alt * Math.tan(gimbalPod.currentPitch || 0);
+      const effRight = relRight - alt * Math.tan(gimbalPod.currentRoll || 0);
+
+      const rawSvgX = effRight * scale;
+      const rawSvgY = -effForward * scale;
 
       const maxR = 210;
       const distSvg = Math.hypot(rawSvgX, rawSvgY);
@@ -8584,28 +8771,113 @@ ghostDroneMesh.root.visible = false;
 scene.add(ghostDroneMesh.root);
 try { buildDroneBellyPayload(); } catch (e) { console.warn('buildDroneBellyPayload:', e); }
 
-const TRAIL_MAX = 40;
+// Realistic Aerodynamic Tip Vortex Wake (翼尖水氣渦流)
+const TRAIL_MAX = 28;
 const trailPointsL = [];
 const trailPointsR = [];
+const trailPositionsL = new Float32Array(TRAIL_MAX * 3);
+const trailPositionsR = new Float32Array(TRAIL_MAX * 3);
+const trailAlphasL = new Float32Array(TRAIL_MAX);
+const trailAlphasR = new Float32Array(TRAIL_MAX);
+
 const trailGeoL = new THREE.BufferGeometry();
+trailGeoL.setAttribute('position', new THREE.BufferAttribute(trailPositionsL, 3));
+trailGeoL.setAttribute('aAlpha', new THREE.BufferAttribute(trailAlphasL, 1));
+
 const trailGeoR = new THREE.BufferGeometry();
-const trailMat = new THREE.LineBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.5 });
+trailGeoR.setAttribute('position', new THREE.BufferAttribute(trailPositionsR, 3));
+trailGeoR.setAttribute('aAlpha', new THREE.BufferAttribute(trailAlphasR, 1));
+
+const trailMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+  uniforms: {
+    uBaseColor: { value: new THREE.Color(0xf8fafc) }, // Atmospheric translucent mist white
+    uOpacity: { value: 0.0 }
+  },
+  vertexShader: `
+    attribute float aAlpha;
+    varying float vAlpha;
+    void main() {
+      vAlpha = aAlpha;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 uBaseColor;
+    uniform float uOpacity;
+    varying float vAlpha;
+    void main() {
+      float a = vAlpha * uOpacity;
+      if (a < 0.005) discard;
+      gl_FragColor = vec4(uBaseColor, a);
+    }
+  `
+});
+
 const trailLineL = new THREE.Line(trailGeoL, trailMat);
 const trailLineR = new THREE.Line(trailGeoR, trailMat);
+trailLineL.frustumCulled = false;
+trailLineR.frustumCulled = false;
 scene.add(trailLineL, trailLineR);
 
-function updateWingtipTrails() {
-  const speed = Math.hypot(drone.vel.x, drone.vel.z);
-  if (speed > 3.5 && state.cameraMode === 'chase') {
-    const leftOffset = new THREE.Vector3(-0.88, 0, 0.85)
-      .applyAxisAngle(new THREE.Vector3(0, 1, 0), drone.yaw)
-      .add(drone.pos);
-    const rightOffset = new THREE.Vector3(0.88, 0, 0.85)
-      .applyAxisAngle(new THREE.Vector3(0, 1, 0), drone.yaw)
-      .add(drone.pos);
+function updateWingtipTrails(dt = 0.016) {
+  // Only render in Chase camera mode
+  if (state.cameraMode !== 'chase' || !playerDroneMesh || !playerDroneMesh.rotors || playerDroneMesh.rotors.length < 4) {
+    trailMat.uniforms.uOpacity.value = 0.0;
+    trailPointsL.length = 0;
+    trailPointsR.length = 0;
+    trailGeoL.setDrawRange(0, 0);
+    trailGeoR.setDrawRange(0, 0);
+    return;
+  }
 
-    trailPointsL.push(leftOffset);
-    trailPointsR.push(rightOffset);
+  const speed = Math.hypot(drone.vel.x, drone.vel.z);
+  const ctrl = sampleFlightControls();
+
+  // 1. Aerodynamic Blade Loading & Maneuver G-Force Factor
+  // Real blade tip vortices require high blade loading: sharp banking, rapid pitch/roll changes, or boost
+  const turnG = Math.min(1.0, (Math.abs(drone.pitchRate) + Math.abs(drone.rollRate)) * 0.85 + Math.abs(drone.yawRate) * 0.45);
+  const climbLoad = ctrl.throttle > 0 ? (ctrl.throttle * 0.45) : 0;
+  const boostLoad = ctrl.boost ? 0.70 : 0;
+
+  // 2. Weather Moisture Scaling
+  const wName = state.weather;
+  const humidity = (wName === 'heavy_rain' ? 1.0 : (wName === 'drizzle' ? 0.90 : (wName === 'fog' ? 0.85 : (wName === 'cloudy' ? 0.55 : 0.35))));
+
+  // Dynamic Speed Inception: in dry weather, needs fast cruise (> 5.8 m/s); in rain/fog, threshold lowers (~3.6 m/s)
+  const speedBaseline = 5.8 - (humidity - 0.35) * 3.4;
+  const speedEnergy = THREE.MathUtils.clamp((speed - speedBaseline) / 8.5, 0, 1.0);
+
+  // Total Aerodynamic Wake Intensity
+  const wakeEnergy = speedEnergy * 0.50 + turnG * 0.38 + climbLoad * 0.25 + boostLoad;
+  const moistureMult = 0.85 + humidity * 0.35;
+  const totalIntensity = wakeEnergy * moistureMult;
+
+  // Golden Ratio Balance between Realism and Visual Effect:
+  // - Low-speed hover & gentle taxiing (< 5.0 m/s): ZERO trail (clean & realistic)
+  // - Fast cruise (> 8.0 m/s): Subtle, elegant mist streamer starts to feather out (~0.16 ~ 0.25 opacity)
+  // - High-G turns / sharp banking / boost: Dynamic, prominent vapor trails (~0.30 ~ 0.60 opacity)
+  const threshold = 0.14;
+  const isCondensing = totalIntensity >= threshold && speed > 3.0 && !drone.crashed;
+
+  let targetOpacity = 0.0;
+  if (isCondensing) {
+    const norm = Math.min(1.0, (totalIntensity - threshold) / 0.70);
+    targetOpacity = 0.15 + norm * 0.45; // Smooth transition: 0.15 up to 0.60
+  }
+  trailMat.uniforms.uOpacity.value = THREE.MathUtils.lerp(trailMat.uniforms.uOpacity.value, targetOpacity, Math.min(1, dt * 6.5));
+
+  // Sample exact 3D rotor tips (rear left & rear right rotors: rotors[2] and rotors[3])
+  if (isCondensing) {
+    const leftTip = new THREE.Vector3();
+    const rightTip = new THREE.Vector3();
+    playerDroneMesh.rotors[2].getWorldPosition(leftTip);
+    playerDroneMesh.rotors[3].getWorldPosition(rightTip);
+
+    trailPointsL.push(leftTip);
+    trailPointsR.push(rightTip);
     if (trailPointsL.length > TRAIL_MAX) {
       trailPointsL.shift();
       trailPointsR.shift();
@@ -8615,14 +8887,53 @@ function updateWingtipTrails() {
     trailPointsR.shift();
   }
 
-  trailGeoL.setFromPoints(trailPointsL);
-  trailGeoR.setFromPoints(trailPointsR);
+  const n = trailPointsL.length;
+  if (n < 2 || trailMat.uniforms.uOpacity.value < 0.01) {
+    trailGeoL.setDrawRange(0, 0);
+    trailGeoR.setDrawRange(0, 0);
+    return;
+  }
+
+  // Realistic Turbulent Downwash & Wake Dissipation Drift
+  for (let i = 0; i < n; i++) {
+    const age = (n - 1 - i); // 0 at head (newest), n-1 at tail (oldest)
+    // Downwash suction pushes older trailing air downwards
+    trailPointsL[i].y -= 1.15 * dt * (age / n);
+    trailPointsR[i].y -= 1.15 * dt * (age / n);
+
+    // Pack into BufferAttributes
+    const idx = i * 3;
+    trailPositionsL[idx + 0] = trailPointsL[i].x;
+    trailPositionsL[idx + 1] = trailPointsL[i].y;
+    trailPositionsL[idx + 2] = trailPointsL[i].z;
+
+    trailPositionsR[idx + 0] = trailPointsR[i].x;
+    trailPositionsR[idx + 1] = trailPointsR[i].y;
+    trailPositionsR[idx + 2] = trailPointsR[i].z;
+
+    // Organic non-linear vapor fading curve (fades softly as wake dissipates)
+    const normalizedLife = i / (n - 1);
+    const alphaVal = Math.pow(normalizedLife, 1.35);
+    trailAlphasL[i] = alphaVal;
+    trailAlphasR[i] = alphaVal;
+  }
+
+  trailGeoL.attributes.position.needsUpdate = true;
+  trailGeoL.attributes.aAlpha.needsUpdate = true;
+  trailGeoL.setDrawRange(0, n);
+
+  trailGeoR.attributes.position.needsUpdate = true;
+  trailGeoR.attributes.aAlpha.needsUpdate = true;
+  trailGeoR.setDrawRange(0, n);
 }
 
 // ============================================================================
 // 13. FLIGHT PHYSICS, COLLISION & RACE LOGIC
 // ============================================================================
 function resetDroneTransform(x, y, z, yaw = 0) {
+  drone.crashed = false;
+  drone.crashState = 'none';
+  drone.tumbleTimer = 0;
   drone.pos.set(x, y, z);
   drone.vel.set(0, 0, 0);
   drone.yaw = yaw;
@@ -8642,16 +8953,30 @@ function resetDroneTransform(x, y, z, yaw = 0) {
   playerDroneMesh.root.rotation.set(0, drone.yaw, 0);
   playerDroneMesh.tiltGroup.rotation.set(0, 0, 0);
 
+  if (typeof resetGimbalPod === 'function') resetGimbalPod();
+
   document.getElementById('landing-indicator').classList.remove('visible');
 }
 
 function respawnAtLastCheckpoint(withPenalty = false) {
+  drone.crashed = false;
+  drone.crashState = 'none';
+  drone.tumbleTimer = 0;
+  const crashOverlay = document.getElementById('crash-overlay');
+  if (crashOverlay) crashOverlay.classList.add('hidden');
+
   if (state.gameMode === 'tactical_strike') {
     resetDroneTransform(0, 1.2, 0, 0);
-    showAnnouncement('FARP RESPAWN', '已重置回臨時放飛點', '#ef4444');
+    if (withPenalty && state.raceActive) {
+      tacticalState.crashes = (tacticalState.crashes || 0) + 1;
+      state.collisionCount += 5; // Catastrophic crash penalty (-25 pts)
+      showAnnouncement('FARP RESPAWN', '已於前進基地重新整裝放飛 (墜毀扣分)', '#ef4444');
+    } else {
+      showAnnouncement('FARP RESPAWN', '已重置回臨時放飛點', '#00f0ff');
+    }
     return;
   }
-  const isTraining = state.gameMode === 'training' || state.gameMode === 'single_race';
+  const isTraining = state.gameMode === 'training';
   if (isTraining) {
     let spawnPos = { x: 0, y: 1.2, z: 0 };
     let spawnYaw = 0;
@@ -8675,20 +9000,108 @@ function respawnAtLastCheckpoint(withPenalty = false) {
       spawnYaw = -Math.PI;
     }
     resetDroneTransform(spawnPos.x, spawnPos.y, spawnPos.z, spawnYaw);
-    showAnnouncement('TRAINING RESET', '已重置回當前訓練步驟起點', '#00f0ff');
+    if (withPenalty && state.raceActive) {
+      state.penaltyTime += 5.0;
+      state.collisionCount += 1;
+      showAnnouncement('CRASH RESPAWN +5.0s', '已於步驟起點重新起飛', '#ef4444');
+    } else {
+      showAnnouncement('TRAINING RESET', '已重置回當前訓練步驟起點', '#00f0ff');
+    }
     return;
   }
 
-  const cp = state.lastCheckpoint;
+  const cp = state.lastCheckpoint || { pos: { x: 0, y: 1.2, z: 0 }, yaw: 0 };
   resetDroneTransform(cp.pos.x, cp.pos.y, cp.pos.z, cp.yaw);
 
   if (withPenalty && state.raceActive && state.gameMode !== 'free_flight') {
-    state.penaltyTime += 3.0;
+    state.penaltyTime += 5.0;
     state.collisionCount += 1;
-    showAnnouncement('CHECKPOINT +3.0s', '已重置至上一檢查點', '#f59e0b');
+    showAnnouncement('CHECKPOINT +5.0s', '已重置至上一檢查點 (加罰5秒)', '#ef4444');
   } else {
     showAnnouncement('POSITION RESET', '位置已重置', '#00f0ff');
   }
+}
+
+function triggerDroneCrash(causeText, impactSpeed = 0, type = 'obstacle') {
+  if (drone.crashed) return;
+  drone.crashed = true;
+  drone.crashCause = causeText;
+  drone.crashSpeed = impactSpeed;
+  drone.pitchRate = 0;
+  drone.rollRate = 0;
+  drone.yawRate = 0;
+
+  const inWilderness = state.gameMode === 'tactical_strike';
+  const ground = inWilderness ? wildernessHeight(drone.pos.x, drone.pos.z) : 0;
+  const agl = drone.pos.y - ground - 0.95;
+
+  // Mid-air collision at altitude: initiate violent uncontrolled tumble descent
+  if (type !== 'ground' && agl > 1.8) {
+    drone.crashState = 'tumbling';
+    drone.tumbleTimer = 0;
+    // Chaotic spin impulse (11 ~ 20 rad/s)
+    drone.tumbleSpinX = (Math.random() > 0.5 ? 1 : -1) * (11.0 + Math.random() * 9.0);
+    drone.tumbleSpinY = (Math.random() > 0.5 ? 1 : -1) * (8.0 + Math.random() * 8.0);
+    drone.tumbleSpinZ = (Math.random() > 0.5 ? 1 : -1) * (12.0 + Math.random() * 10.0);
+
+    // Aerodynamic tumble trajectory: retain deflected horizontal momentum, start downward plunge
+    drone.vel.x *= 0.7;
+    drone.vel.z *= 0.7;
+    drone.vel.y = Math.min(drone.vel.y, -3.8);
+
+    triggerDamageFlash();
+    audioEngine.playCollisionAlert();
+    showAnnouncement('OUT OF CONTROL', '姿態失控・失速墜落中！', '#ef4444');
+    // Note: Do NOT display crash-overlay card yet! Wait until ground impact.
+    return;
+  }
+
+  // Low altitude / direct ground crash: settle immediately
+  settleDroneCrash();
+}
+
+function settleDroneCrash() {
+  if (drone.crashState === 'settled') return;
+  drone.crashState = 'settled';
+  drone.vel.set(0, 0, 0);
+  drone.pitchRate = 0;
+  drone.rollRate = 0;
+  drone.yawRate = 0;
+
+  // Visual airframe wreckage tilt onto ground
+  drone.pitch += (Math.random() - 0.5) * 0.45;
+  drone.roll += (Math.random() < 0.5 ? 1 : -1) * (0.65 + Math.random() * 0.35);
+
+  if (playerDroneMesh && playerDroneMesh.root && playerDroneMesh.tiltGroup) {
+    playerDroneMesh.root.position.copy(drone.pos);
+    playerDroneMesh.root.rotation.set(0, drone.yaw, 0);
+    playerDroneMesh.tiltGroup.rotation.order = 'YXZ';
+    playerDroneMesh.tiltGroup.rotation.set(drone.pitch, 0, drone.roll);
+  }
+
+  triggerDamageFlash();
+  audioEngine.playCrashShatter();
+  audioEngine.updateRotorSound(0, 0, false);
+
+  // User requirement: Wait until ground touch, then show warning card after brief impact pause
+  setTimeout(() => {
+    if (drone.crashState !== 'settled') return;
+    const crashOverlay = document.getElementById('crash-overlay');
+    const causeEl = document.getElementById('crash-cause-text');
+    const penEl = document.getElementById('crash-penalty-text');
+
+    const isTactical = state.gameMode === 'tactical_strike';
+    const kmh = (drone.crashSpeed * 3.6).toFixed(0);
+    if (causeEl) causeEl.textContent = `${drone.crashCause} (${kmh} km/h)・機體結構受損斷槳`;
+    if (penEl) {
+      if (isTactical) {
+        penEl.textContent = '戰場懲罰：墜毀失誤計入結算 (−25分)・按 R 於 FARP 重生';
+      } else {
+        penEl.textContent = '競速懲罰：加計 +5.0s 懲罰時間・失誤次數 +1';
+      }
+    }
+    if (crashOverlay) crashOverlay.classList.remove('hidden');
+  }, 450);
 }
 
 function triggerDamageFlash() {
@@ -8796,6 +9209,10 @@ function resolveBoxContact(box) {
   pos.z += z * (depth + .001);
   const closingSpeed = -((vel.x - (box.speedX ?? 0)) * x + vel.y * y + vel.z * z);
   if (closingSpeed > 0) {
+    if (closingSpeed >= 7.2) {
+      triggerDroneCrash(box.label ? `撞擊${box.label}` : '高速撞擊結構障礙', closingSpeed, 'obstacle');
+      return;
+    }
     const impulse = closingSpeed * (closingSpeed >= 2.4 ? 1.25 : 1);
     vel.x += impulse * x;
     vel.y += impulse * y;
@@ -8806,6 +9223,49 @@ function resolveBoxContact(box) {
 
 const colliderCenter = new THREE.Vector3();
 function updateDronePhysics(dt) {
+  if (drone.crashed) {
+    if (drone.crashState === 'tumbling') {
+      drone.tumbleTimer += dt;
+      // 1. Violent tumbling 3-axis angular rotation
+      drone.pitch += drone.tumbleSpinX * dt;
+      drone.yaw += drone.tumbleSpinY * dt;
+      drone.roll += drone.tumbleSpinZ * dt;
+
+      // 2. Uncontrolled free-fall gravity plunge (-13.5 m/s^2)
+      drone.vel.y -= 13.5 * dt;
+      drone.vel.x *= Math.max(0, 1 - 0.45 * dt);
+      drone.vel.z *= Math.max(0, 1 - 0.45 * dt);
+
+      // 3. Step position
+      drone.pos.addScaledVector(drone.vel, dt);
+
+      // Sputtering damaged motor sound
+      const sputter = Math.max(0, (1 - drone.tumbleTimer * 0.45) * 0.35);
+      audioEngine.updateRotorSound(sputter, 0, false);
+
+      // 4. Ground contact detection
+      const inWilderness = state.gameMode === 'tactical_strike';
+      const ground = inWilderness ? wildernessHeight(drone.pos.x, drone.pos.z) : 0;
+      if (drone.pos.y <= ground + 0.95 || drone.tumbleTimer > 5.5) {
+        drone.pos.y = ground + 0.95;
+        settleDroneCrash();
+        return;
+      }
+
+      // Update 3D mesh for tumbling airframe
+      if (playerDroneMesh && playerDroneMesh.root && playerDroneMesh.tiltGroup) {
+        playerDroneMesh.root.position.copy(drone.pos);
+        playerDroneMesh.root.rotation.set(0, drone.yaw, 0);
+        playerDroneMesh.tiltGroup.rotation.order = 'YXZ';
+        playerDroneMesh.tiltGroup.rotation.set(drone.pitch, 0, drone.roll);
+      }
+      return;
+    }
+
+    drone.vel.set(0, 0, 0);
+    audioEngine.updateRotorSound(0, 0, false);
+    return;
+  }
   const ctrl = sampleFlightControls();
   updateKeyboardVisualizer(ctrl);
 
@@ -8883,58 +9343,76 @@ function updateDronePhysics(dt) {
     gustRight = gustWindX * rX + gustWindZ * rZ;
   }
 
+  // Ground contact & landing state: multi-rotor drones cannot yaw or drift against ground friction without airborne lift
+  const isGrounded = agl <= 0.05 && drone.vel.y <= 0.15 && ctrl.throttle <= 0;
+
   // 1. Yaw (scaled by payload rotational inertia + Crosswind Weathercocking Torque + VRS torque)
-  const vrsYawTwitch = vrs > 0.14
-    ? (Math.sin(tNow * 8.2) * 0.42 + Math.cos(tNow * 15.1) * 0.28) * vrs
-    : 0;
-  const weathercockYaw = -(meanRight * 0.008 + gustRight * 0.024) * THREE.MathUtils.clamp(curWind / 8.0, 0, 1.4) * inertiaScale;
-  const turbYaw = (Math.sin(tNow * 5.4) * 0.22 + Math.cos(tNow * 9.7) * 0.14) * turb * inertiaScale;
-  const yawAuthority = 1.0 - vrs * 0.28;
-  const targetYawRate = ctrl.yaw * p.yawMaxRate * inertiaScale * yawAuthority + weathercockYaw + turbYaw + vrsYawTwitch;
-  drone.yawRate += (targetYawRate - drone.yawRate) * Math.min(1, p.yawResponse * inertiaScale * dt);
-  drone.yaw += drone.yawRate * dt;
+  if (isGrounded) {
+    drone.yawRate = 0;
+  } else {
+    const vrsYawTwitch = vrs > 0.14
+      ? (Math.sin(tNow * 8.2) * 0.42 + Math.cos(tNow * 15.1) * 0.28) * vrs
+      : 0;
+    const weathercockYaw = -(meanRight * 0.008 + gustRight * 0.024) * THREE.MathUtils.clamp(curWind / 8.0, 0, 1.4) * inertiaScale;
+    const turbYaw = (Math.sin(tNow * 5.4) * 0.22 + Math.cos(tNow * 9.7) * 0.14) * turb * inertiaScale;
+    const yawAuthority = 1.0 - vrs * 0.28;
+    const targetYawRate = ctrl.yaw * p.yawMaxRate * inertiaScale * yawAuthority + weathercockYaw + turbYaw + vrsYawTwitch;
+    drone.yawRate += (targetYawRate - drone.yawRate) * Math.min(1, p.yawResponse * inertiaScale * dt);
+    drone.yaw += drone.yawRate * dt;
+  }
 
   // 2. 2nd-Order Rotational Spring-Damper Attitude Dynamics (Pitch & Roll + Wind Lean + Blade-Flapping Gusts + VRS)
-  const vrsPitchBuffet = vrs > 0.12
-    ? (Math.sin(tNow * 10.4) * 0.075 + Math.cos(tNow * 18.7) * 0.052 + Math.sin(tNow * 27.1) * 0.028) * vrs
-    : 0;
-  const vrsRollBuffet = vrs > 0.12
-    ? (Math.cos(tNow * 9.8) * 0.092 + Math.sin(tNow * 17.9) * 0.064 + Math.cos(tNow * 25.8) * 0.032) * vrs
-    : 0;
+  if (isGrounded) {
+    drone.pitch = 0;
+    drone.roll = 0;
+    drone.pitchRate = 0;
+    drone.rollRate = 0;
+  } else {
+    const vrsPitchBuffet = vrs > 0.12
+      ? (Math.sin(tNow * 10.4) * 0.075 + Math.cos(tNow * 18.7) * 0.052 + Math.sin(tNow * 27.1) * 0.028) * vrs
+      : 0;
+    const vrsRollBuffet = vrs > 0.12
+      ? (Math.cos(tNow * 9.8) * 0.092 + Math.sin(tNow * 17.9) * 0.064 + Math.cos(tNow * 25.8) * 0.032) * vrs
+      : 0;
 
-  // In Stabilized mode, flight controller leans INTO the mean wind (Wind-Compensation Crab Angle) to counter drift;
-  // sudden gusts induce rotor blade-flapping dihedral tilt (-gust) and eddy attitude perturbations.
-  const fcWindLeanPitch = isSport ? 0 : THREE.MathUtils.clamp(meanFwd * 0.0175, -0.23, 0.23);
-  const fcWindLeanRoll = isSport ? 0 : THREE.MathUtils.clamp(meanRight * 0.0175, -0.23, 0.23);
-  const windPitchPerturb = fcWindLeanPitch - gustFwd * 0.022 + (Math.sin(tNow * 6.3) * 0.052 + Math.cos(tNow * 11.4) * 0.034) * turb;
-  const windRollPerturb = fcWindLeanRoll - gustRight * 0.022 + (Math.cos(tNow * 5.8) * 0.058 + Math.sin(tNow * 10.9) * 0.038) * turb;
+    // In Stabilized mode, flight controller leans INTO the mean wind (Wind-Compensation Crab Angle) to counter drift;
+    // sudden gusts induce rotor blade-flapping dihedral tilt (-gust) and eddy attitude perturbations.
+    const fcWindLeanPitch = isSport ? 0 : THREE.MathUtils.clamp(meanFwd * 0.0175, -0.23, 0.23);
+    const fcWindLeanRoll = isSport ? 0 : THREE.MathUtils.clamp(meanRight * 0.0175, -0.23, 0.23);
+    const windPitchPerturb = fcWindLeanPitch - gustFwd * 0.022 + (Math.sin(tNow * 6.3) * 0.052 + Math.cos(tNow * 11.4) * 0.034) * turb;
+    const windRollPerturb = fcWindLeanRoll - gustRight * 0.022 + (Math.cos(tNow * 5.8) * 0.058 + Math.sin(tNow * 10.9) * 0.038) * turb;
 
-  const cyclicAuthority = 1.0 - vrs * 0.25;
-  const targetPitch = (ctrl.brake ? fcWindLeanPitch : -ctrl.pitch * p.maxTiltAngle * cyclicAuthority + windPitchPerturb) + vrsPitchBuffet;
-  const targetRoll = (ctrl.brake ? fcWindLeanRoll : -ctrl.roll * p.maxTiltAngle * cyclicAuthority + windRollPerturb) + vrsRollBuffet;
-  const omegaN = p.tiltResponse * 2.15 * inertiaScale * (1.0 - vrs * 0.24);
-  const zeta = (isSport ? 0.76 : 0.88) * (1.0 - vrs * 0.28);
-  const attSubSteps = 2;
-  const subDt = Math.min(dt, 0.05) / attSubSteps;
-  for (let s = 0; s < attSubSteps; s++) {
-    const pitchAcc = (omegaN * omegaN) * (targetPitch - drone.pitch) - (2 * zeta * omegaN) * drone.pitchRate;
-    const rollAcc = (omegaN * omegaN) * (targetRoll - drone.roll) - (2 * zeta * omegaN) * drone.rollRate;
-    drone.pitchRate += pitchAcc * subDt;
-    drone.rollRate += rollAcc * subDt;
-    drone.pitch += drone.pitchRate * subDt;
-    drone.roll += drone.rollRate * subDt;
-  }
-  if (turb > 0.01) {
-    drone.pitchRate += (Math.cos(tNow * 8.7) * 1.35 + Math.sin(tNow * 14.9) * 0.85) * turb * inertiaScale * dt;
-    drone.rollRate += (Math.sin(tNow * 9.2) * 1.50 + Math.cos(tNow * 15.7) * 0.95) * turb * inertiaScale * dt;
-  }
-  if (vrs > 0.14) {
-    drone.rollRate += Math.sin(tNow * 21.3) * vrs * 1.85 * dt;
-    drone.pitchRate += Math.cos(tNow * 18.7) * vrs * 1.65 * dt;
+    const cyclicAuthority = 1.0 - vrs * 0.25;
+    const targetPitch = (ctrl.brake ? fcWindLeanPitch : -ctrl.pitch * p.maxTiltAngle * cyclicAuthority + windPitchPerturb) + vrsPitchBuffet;
+    const targetRoll = (ctrl.brake ? fcWindLeanRoll : -ctrl.roll * p.maxTiltAngle * cyclicAuthority + windRollPerturb) + vrsRollBuffet;
+    const omegaN = p.tiltResponse * 2.15 * inertiaScale * (1.0 - vrs * 0.24);
+    // Critically damped attitude dynamic stabilization (zeta ~ 0.98 in Stabilized) to eliminate forward flight wobble
+    const zeta = (isSport ? 0.78 : 0.98) * (1.0 - vrs * 0.28);
+    const attSubSteps = 2;
+    const subDt = Math.min(dt, 0.05) / attSubSteps;
+    for (let s = 0; s < attSubSteps; s++) {
+      const pitchAcc = (omegaN * omegaN) * (targetPitch - drone.pitch) - (2 * zeta * omegaN) * drone.pitchRate;
+      const rollAcc = (omegaN * omegaN) * (targetRoll - drone.roll) - (2 * zeta * omegaN) * drone.rollRate;
+      drone.pitchRate += pitchAcc * subDt;
+      drone.rollRate += rollAcc * subDt;
+      drone.pitch += drone.pitchRate * subDt;
+      drone.roll += drone.rollRate * subDt;
+    }
+    if (turb > 0.01) {
+      drone.pitchRate += (Math.cos(tNow * 8.7) * 1.35 + Math.sin(tNow * 14.9) * 0.85) * turb * inertiaScale * dt;
+      drone.rollRate += (Math.sin(tNow * 9.2) * 1.50 + Math.cos(tNow * 15.7) * 0.95) * turb * inertiaScale * dt;
+    }
+    if (vrs > 0.14) {
+      drone.rollRate += Math.sin(tNow * 21.3) * vrs * 1.85 * dt;
+      drone.pitchRate += Math.cos(tNow * 18.7) * vrs * 1.65 * dt;
+    }
   }
 
   // 3. Thrust-Vector Tilting Propulsion & Quadratic Airframe Drag
-  if (ctrl.brake) {
+  if (isGrounded) {
+    drone.vel.x = 0;
+    drone.vel.z = 0;
+  } else if (ctrl.brake) {
     // Active aerodynamic flare braking
     const brakeEff = 6.5 * inertiaScale * (1.0 - vrs * 0.35);
     drone.vel.x *= Math.max(0, 1 - brakeEff * dt);
@@ -8971,7 +9449,8 @@ function updateDronePhysics(dt) {
   // 4. Vertical Lift, Flight-Controller Descent Envelope Protection, Ground Effect (IGE) & VRS Sink
   drone.groundEffectFactor = computeGroundEffectFactor(agl);
   const cosTilt = Math.max(0.45, Math.cos(drone.pitch) * Math.cos(drone.roll));
-  const tiltLossCompensation = state.flightMode === 'stabilized' ? 0.85 : 0.42;
+  // In Stabilized mode, flight controller dynamically compensates tilt-induced vertical lift loss (~96%) to eliminate cruising altitude bobbing
+  const tiltLossCompensation = state.flightMode === 'stabilized' ? 0.96 : 0.42;
   const uncompensatedTiltDrop = (1.0 - cosTilt) * (1.0 - tiltLossCompensation) * 9.81;
 
   if (Math.abs(ctrl.throttle) > 0.05) {
@@ -9002,6 +9481,68 @@ function updateDronePhysics(dt) {
   drone.vel.y -= uncompensatedTiltDrop * dt;
   if (drone.groundEffectFactor > 1.02 && drone.vel.y < 0) {
     drone.vel.y *= Math.max(0, 1 - (drone.groundEffectFactor - 1.0) * 3.8 * dt);
+  }
+
+  // 4.5 Dynamic 6S LiPo Battery Physics: Real-time Load Current, Voltage Sag & Capacity Drain
+  if (drone.battery) {
+    let currentDraw = 0.8; // Avionics + telemetry baseline load
+    if (isGrounded) {
+      currentDraw = 1.6; // Ground idle motor RPM
+    } else {
+      // Hover power: ~14.0A baseline at 23V, scaled by mass ratio and IGE cushion
+      const baseHover = (14.2 * drone.massRatio) / Math.max(0.85, drone.groundEffectFactor);
+      const climbCurrent = ctrl.throttle > 0 ? (ctrl.throttle * 12.5) : (ctrl.throttle < 0 ? -2.0 : 0);
+      const tiltMag = Math.sin(Math.max(Math.abs(drone.pitch), Math.abs(drone.roll)));
+      const maneuverCurrent = (tiltMag / 0.45) * 8.5 + (Math.hypot(drone.vel.x, drone.vel.z) / 25.0) * 6.5;
+      const boostCurrent = ctrl.boost ? 18.5 : 0;
+      const brakeCurrent = ctrl.brake ? 4.5 : 0;
+
+      currentDraw = baseHover + climbCurrent + maneuverCurrent + boostCurrent + brakeCurrent;
+      currentDraw = THREE.MathUtils.clamp(currentDraw, 3.2, 54.0);
+    }
+
+    // Low-pass filter load current for realistic electrical inertia
+    drone.battery.currentAmps = THREE.MathUtils.lerp(drone.battery.currentAmps, currentDraw, Math.min(1, dt * 8.0));
+
+    // Capacity integration: mAh = (Amps * dt / 3.6) * dischargeSpeedFactor
+    // With 1.45x factor, 6000mAh pack provides ~10-12 mins of cruise or ~6-7 mins of high-G racing
+    const drainMah = (drone.battery.currentAmps * dt / 3.6) * 1.45;
+    drone.battery.remainingMah = Math.max(0, drone.battery.remainingMah - drainMah);
+    const soc = drone.battery.remainingMah / drone.battery.capacityMah;
+    drone.battery.percent = Math.max(0, Math.min(100, Math.round(soc * 100)));
+
+    // Open circuit voltage (OCV) from 6S LiPo chemistry curve
+    drone.battery.openCircuitVoltage = computeOpenCircuitVoltage6S(soc);
+
+    // Instantaneous Voltage Sag under load (V = Voc - I * R_int)
+    const voltageSag = drone.battery.currentAmps * drone.battery.internalResistance;
+    const loadedV = Math.max(18.0, drone.battery.openCircuitVoltage - voltageSag);
+    drone.battery.voltage = THREE.MathUtils.lerp(drone.battery.voltage, loadedV, Math.min(1, dt * 6.0));
+
+    // Low battery audio-visual alerts
+    if (drone.battery.percent <= 20 && !drone.battery.lowBattWarned) {
+      drone.battery.lowBattWarned = true;
+      if (typeof showAnnouncement === 'function') {
+        showAnnouncement('LOW BATTERY (20%)', '動力電壓低於 21.6V，建議儘速返航 (RTH)', '#f59e0b');
+      }
+    }
+    if (drone.battery.percent <= 10 && !drone.battery.critBattWarned) {
+      drone.battery.critBattWarned = true;
+      if (typeof showAnnouncement === 'function') {
+        showAnnouncement('CRITICAL BATTERY (10%)', '電壓危險臨界！飛控已限制大油門輸出', '#ef4444');
+      }
+    }
+
+    // Battery exhaustion & power derating:
+    if (drone.battery.percent <= 0) {
+      // Cut motor power, forced emergency autorotation / sink
+      drone.vel.y -= 7.5 * dt;
+      drone.vel.x *= Math.max(0, 1 - 2.5 * dt);
+      drone.vel.z *= Math.max(0, 1 - 2.5 * dt);
+    } else if (drone.battery.percent <= 6) {
+      // Emergency power derating: limit climb throttle
+      if (ctrl.throttle > 0.15) ctrl.throttle = 0.15;
+    }
   }
 
   // 5. Environmental Weather Translational Forces, Gust Drift & Vertical Wind Shear
@@ -9100,9 +9641,18 @@ function updateDronePhysics(dt) {
     if (drone.pos.y < ground + .95) {
       drone.pos.y = ground + .95;
       if (drone.vel.y < 0) {
-        const speed = -drone.vel.y;
-        drone.vel.y = speed >= 5 ? speed * .18 : 0;
-        if (speed >= 5) reportImpact('地面重著陸', speed);
+        const dropSpeed = -drone.vel.y;
+        const horizSpeed = Math.hypot(drone.vel.x, drone.vel.z);
+        const tiltAngle = Math.max(Math.abs(drone.pitch), Math.abs(drone.roll));
+
+        // Catastrophic hard ground slam or inverted prop strike
+        if (dropSpeed >= 6.8 || (horizSpeed >= 8.5 && tiltAngle > 0.38)) {
+          triggerDroneCrash(dropSpeed >= 6.8 ? '超速垂直重砸地表' : '高速翻滾打地 (Prop Strike)', Math.max(dropSpeed, horizSpeed), 'ground');
+          return;
+        }
+
+        drone.vel.y = dropSpeed >= 5 ? dropSpeed * .18 : 0;
+        if (dropSpeed >= 4.2) reportImpact('地面重著陸', dropSpeed);
       }
     }
     if (drone.pos.y > PHYSICS.maxAltitude) {
@@ -9124,7 +9674,7 @@ function updateDronePhysics(dt) {
   });
 
   audioEngine.updateRotorSound(hSpeed, ctrl.throttle, ctrl.boost);
-  updateWingtipTrails();
+  updateWingtipTrails(dt);
 }
 
 function checkTrainingObjectives(dt) {
@@ -9286,7 +9836,7 @@ function checkCourseObjectives(dt) {
     checkTacticalObjectives(dt);
     return;
   }
-  const isTraining = state.gameMode === 'training' || state.gameMode === 'single_race';
+  const isTraining = state.gameMode === 'training';
   if (isTraining) {
     checkTrainingObjectives(dt);
     return;
@@ -9375,6 +9925,73 @@ function checkCourseObjectives(dt) {
 const smoothCamPos = new THREE.Vector3(0, 3.3, 6.8);
 const smoothLookAt = new THREE.Vector3(0, 2.1, -16);
 
+// 3-Axis Gyro-Stabilized EO/IR Targeting Pod Dynamic State
+const gimbalPod = {
+  currentPitch: 0,
+  currentRoll: 0,
+  mountOffsetX: 0,
+  mountOffsetY: 0,
+  mountOffsetZ: 0,
+  prevVel: new THREE.Vector3(),
+  hasPrevVel: false
+};
+
+function resetGimbalPod() {
+  gimbalPod.currentPitch = 0;
+  gimbalPod.currentRoll = 0;
+  gimbalPod.mountOffsetX = 0;
+  gimbalPod.mountOffsetY = 0;
+  gimbalPod.mountOffsetZ = 0;
+  gimbalPod.hasPrevVel = false;
+  camera.up.set(0, 1, 0);
+}
+
+function updateGimbalPodPhysics(dt) {
+  // 1. Airframe attitude inertia perturbation
+  // High-performance brushless gimbals isolate ~93% of airframe tilt, leaving ~6.8% transient compliance lag
+  const lagPitchFactor = 0.068;
+  const lagRollFactor = 0.068;
+  const maxDeflection = 0.040; // Max ~2.3 deg transient deflection to preserve bombing precision
+  const targetPitchLag = THREE.MathUtils.clamp(drone.pitch * lagPitchFactor, -maxDeflection, maxDeflection);
+  const targetRollLag = THREE.MathUtils.clamp(drone.roll * lagRollFactor, -maxDeflection, maxDeflection);
+
+  // Brushless motor restoring dynamics: critically damped recovery towards nadir (~14 rad/s)
+  const motorStiffness = 14.0;
+  gimbalPod.currentPitch += (targetPitchLag - gimbalPod.currentPitch) * Math.min(1.0, motorStiffness * dt);
+  gimbalPod.currentRoll += (targetRollLag - gimbalPod.currentRoll) * Math.min(1.0, motorStiffness * dt);
+
+  // 2. Aerodynamic airflow flutter & weather disturbance at high airspeeds
+  const airspeed = drone.vel.length();
+  const aeroSpeedRatio = Math.min(2.0, airspeed / 12.0);
+  const weatherMult = state.weather === 'typhoon' ? 2.4 : (state.weather === 'heavy_rain' ? 1.5 : (state.weather === 'drizzle' ? 1.1 : (state.weather === 'clear' ? 0.0 : 0.6)));
+  const flutterAmp = (0.0005 + 0.0014 * aeroSpeedRatio) * weatherMult;
+  const t = performance.now() * 0.001;
+  const flutterPitch = (Math.sin(t * 19.3) * 0.58 + Math.cos(t * 31.7) * 0.42) * flutterAmp;
+  const flutterRoll = (Math.cos(t * 22.7) * 0.58 + Math.sin(t * 28.3) * 0.42) * flutterAmp;
+
+  // 3. Silicone damping ball bracket compliance (linear G-force inertia F = -ma)
+  if (gimbalPod.hasPrevVel && dt > 0.0001) {
+    const ax = (drone.vel.x - gimbalPod.prevVel.x) / dt;
+    const ay = (drone.vel.y - gimbalPod.prevVel.y) / dt;
+    const az = (drone.vel.z - gimbalPod.prevVel.z) / dt;
+    const targetDispX = THREE.MathUtils.clamp(-ax * 0.0024, -0.035, 0.035);
+    const targetDispY = THREE.MathUtils.clamp(-ay * 0.0020, -0.025, 0.025);
+    const targetDispZ = THREE.MathUtils.clamp(-az * 0.0024, -0.035, 0.035);
+
+    gimbalPod.mountOffsetX += (targetDispX - gimbalPod.mountOffsetX) * Math.min(1.0, 16.0 * dt);
+    gimbalPod.mountOffsetY += (targetDispY - gimbalPod.mountOffsetY) * Math.min(1.0, 16.0 * dt);
+    gimbalPod.mountOffsetZ += (targetDispZ - gimbalPod.mountOffsetZ) * Math.min(1.0, 16.0 * dt);
+  } else {
+    gimbalPod.hasPrevVel = true;
+  }
+  gimbalPod.prevVel.copy(drone.vel);
+
+  return {
+    totalPitch: gimbalPod.currentPitch + flutterPitch,
+    totalRoll: gimbalPod.currentRoll + flutterRoll
+  };
+}
+
 function updateCameraAndWorldAnimations(dt) {
   updateShadowFrustum();
   updateTreeWind(dt);
@@ -9389,6 +10006,7 @@ function updateCameraAndWorldAnimations(dt) {
   const shakeRoll = vrs > 0.12 ? (Math.sin(tShake * 21.5) * 0.014 + Math.cos(tShake * 35.1) * 0.008) * vrs : 0;
 
   if (state.cameraMode === 'chase') {
+    camera.up.set(0, 1, 0);
     const targetCam = new THREE.Vector3(
       drone.pos.x - fX * 6.8 + shakeX,
       drone.pos.y + 2.1 + shakeY,
@@ -9400,25 +10018,74 @@ function updateCameraAndWorldAnimations(dt) {
       drone.pos.z + fZ * 16.0 - shakeZ * 1.2
     );
 
-    smoothCamPos.lerp(targetCam, Math.min(1, 9.5 * dt));
-    smoothLookAt.lerp(targetLook, Math.min(1, 12.0 * dt));
+    // Synchronous critically smoothed camera tracking (11.5x) eliminates visual pitch phase lag during acceleration
+    smoothCamPos.lerp(targetCam, Math.min(1, 11.5 * dt));
+    smoothLookAt.lerp(targetLook, Math.min(1, 11.5 * dt));
 
     camera.position.copy(smoothCamPos);
     camera.lookAt(smoothLookAt);
     if (vrs > 0.12) camera.rotation.z += shakeRoll;
     playerDroneMesh.root.visible = true;
   } else if (state.cameraMode === 'down') {
-    // 3-Axis Gyro-Stabilized EO/IR Targeting Pod: isolates 85%+ of airframe roll/pitch vibration
-    camera.position.set(drone.pos.x + shakeX * 0.25, drone.pos.y + shakeY * 0.2, drone.pos.z + shakeZ * 0.25);
-    camera.rotation.set(-Math.PI / 2 + shakeY * 0.12, drone.yaw + shakeRoll * 0.25, shakeRoll * 0.3, 'YXZ');
-    playerDroneMesh.root.visible = false;
+    if (drone.crashState === 'tumbling') {
+      // Optical gimbal stabilizer power cut: tilts and tumbles locked with airframe
+      camera.up.set(0, 1, 0);
+      camera.position.set(drone.pos.x, drone.pos.y - 0.25, drone.pos.z);
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = drone.yaw;
+      camera.rotation.x = drone.pitch - Math.PI * 0.5;
+      camera.rotation.z = drone.roll;
+      playerDroneMesh.root.visible = false;
+    } else {
+      // 3-Axis Gyro-Stabilized EO/IR Targeting Pod with Real Inertial Lag & Damping Dynamics
+      const { totalPitch, totalRoll } = updateGimbalPodPhysics(dt);
+
+      const hX = -Math.sin(drone.yaw);
+      const hZ = -Math.cos(drone.yaw);
+      const rX = Math.cos(drone.yaw);
+      const rZ = -Math.sin(drone.yaw);
+
+      // Optical boresight: nadir -Y plus transient pitch/roll deflections
+      const camFwd = new THREE.Vector3(
+        hX * totalPitch + rX * totalRoll,
+        -1.0,
+        hZ * totalPitch + rZ * totalRoll
+      ).normalize();
+
+      // Camera UP vector: drone forward plus subtle roll compensation
+      const camUp = new THREE.Vector3(
+        hX - rX * (totalRoll * 0.25),
+        totalPitch,
+        hZ - rZ * (totalRoll * 0.25)
+      ).normalize();
+
+      camera.position.set(
+        drone.pos.x + gimbalPod.mountOffsetX + shakeX * 0.2,
+        drone.pos.y + gimbalPod.mountOffsetY + shakeY * 0.15,
+        drone.pos.z + gimbalPod.mountOffsetZ + shakeZ * 0.2
+      );
+      camera.up.copy(camUp);
+      camera.lookAt(
+        camera.position.x + camFwd.x,
+        camera.position.y + camFwd.y,
+        camera.position.z + camFwd.z
+      );
+      playerDroneMesh.root.visible = false;
+    }
   } else {
     // FPV View (hard-mounted nose camera shows airframe attitude + subtle high-freq vibration)
+    camera.up.set(0, 1, 0);
     camera.position.set(drone.pos.x + fX * 0.8 + shakeX * 0.25, drone.pos.y + 0.06 + shakeY * 0.25, drone.pos.z + fZ * 0.8 + shakeZ * 0.25);
     camera.rotation.order = 'YXZ';
-    camera.rotation.y = drone.yaw + shakeRoll * 0.3;
-    camera.rotation.x = drone.pitch * 0.65 + shakeY * 0.08;
-    camera.rotation.z = drone.roll * 0.55 + shakeRoll * 0.6;
+    if (drone.crashState === 'tumbling') {
+      camera.rotation.y = drone.yaw;
+      camera.rotation.x = drone.pitch;
+      camera.rotation.z = drone.roll;
+    } else {
+      camera.rotation.y = drone.yaw + shakeRoll * 0.3;
+      camera.rotation.x = drone.pitch * 0.65 + shakeY * 0.08;
+      camera.rotation.z = drone.roll * 0.55 + shakeRoll * 0.6;
+    }
     playerDroneMesh.root.visible = false;
   }
 
@@ -9503,7 +10170,7 @@ function updateHUD(dt) {
     }
   }
 
-  const isTraining = state.gameMode === 'training' || state.gameMode === 'single_race';
+  const isTraining = state.gameMode === 'training';
   const totalTime = state.elapsedTime + state.penaltyTime;
   document.getElementById('hud-timer').textContent = formatRaceTime(totalTime);
 
@@ -9645,12 +10312,31 @@ function updateHUD(dt) {
   document.getElementById('bar-speed').style.width = `${Math.min(100, (kmh / 100) * 100)}%`;
 
   document.getElementById('hud-altitude').textContent = agl.toFixed(1);
-  document.getElementById('bar-altitude').style.width = `${Math.min(100, (agl / PHYSICS.maxAltitude) * 100)}%`;
+  document.getElementById('bar-altitude').style.width = `${Math.min(100, (agl / 500.0) * 100)}%`;
 
   document.getElementById('hud-vspeed').textContent = drone.vel.y.toFixed(1);
+  const vsiArrowEl = document.getElementById('hud-vsi-arrow');
+  if (vsiArrowEl) {
+    if (drone.vel.y > 0.25) {
+      vsiArrowEl.textContent = '▲';
+      vsiArrowEl.style.color = 'var(--emerald)';
+    } else if (drone.vel.y < -0.25) {
+      vsiArrowEl.textContent = '▼';
+      vsiArrowEl.style.color = 'var(--amber)';
+    } else {
+      vsiArrowEl.textContent = '―';
+      vsiArrowEl.style.color = 'var(--text-muted)';
+    }
+  }
+
+  const isGroundedNow = agl <= 0.06 && Math.abs(drone.vel.y) < 0.25;
+
   const throttleStateEl = document.getElementById('hud-throttle-state');
   if (throttleStateEl) {
-    if (drone.vrsSeverity > 0.25) {
+    if (isGroundedNow) {
+      throttleStateEl.textContent = '著陸地面';
+      throttleStateEl.style.color = '#94a3b8';
+    } else if (drone.vrsSeverity > 0.25) {
       throttleStateEl.textContent = '渦環亂流 VRS';
       throttleStateEl.style.color = '#ef4444';
     } else if (drone.groundEffectFactor > 1.04) {
@@ -9664,9 +10350,121 @@ function updateHUD(dt) {
       throttleStateEl.style.color = '';
     }
   }
+
+  // Real-time Tactical Payload Status Update
+  const payloadBox = document.getElementById('hud-payload-display');
+  const payloadName = document.getElementById('hud-payload-name');
+  const payloadStatus = document.getElementById('hud-payload-status');
+  if (payloadBox && payloadName && payloadStatus) {
+    if (isTactical) {
+      payloadBox.style.display = 'flex';
+      payloadName.textContent = `82mm 迫彈 ×${tacticalState.bombsRemaining}`;
+      if (tacticalState.bombsRemaining > 0) {
+        payloadStatus.textContent = '[ARMED]';
+        payloadStatus.className = 'osd-armed-tag';
+      } else {
+        payloadStatus.textContent = '[EMPTY]';
+        payloadStatus.className = 'osd-armed-tag empty';
+      }
+    } else {
+      payloadBox.style.display = 'none';
+    }
+  }
+
+  // Real-time 6S LiPo Battery Telemetry Update
+  if (drone.battery) {
+    const battVoltEl = document.getElementById('hud-batt-volt');
+    const battPctEl = document.getElementById('hud-batt-pct');
+    const battSlotEl = document.getElementById('hud-battery-slot');
+    if (battVoltEl && battPctEl) {
+      battVoltEl.textContent = `${drone.battery.voltage.toFixed(1)}V`;
+      battPctEl.textContent = `${drone.battery.percent}%`;
+
+      if (drone.battery.percent <= 12) {
+        battVoltEl.style.color = '#ef4444';
+        battPctEl.style.color = '#ef4444';
+        if (battSlotEl) battSlotEl.classList.add('batt-crit');
+      } else if (drone.battery.percent <= 25) {
+        battVoltEl.style.color = '#f59e0b';
+        battPctEl.style.color = '#f59e0b';
+        if (battSlotEl) battSlotEl.classList.remove('batt-crit');
+      } else {
+        battVoltEl.style.color = '#ffffff';
+        battPctEl.style.color = '#ffffff';
+        if (battSlotEl) battSlotEl.classList.remove('batt-crit');
+      }
+    }
+  }
+
+  // Real-time Environmental Wind Vector Calculation
+  const w = (typeof WEATHER_PROFILES !== 'undefined' && WEATHER_PROFILES[state.weather]) ? WEATHER_PROFILES[state.weather] : null;
+  const windLevelEl = document.getElementById('hud-wind-level');
+  const windTextEl = document.getElementById('hud-wind-text');
+  if (w && windTextEl) {
+    const curWind = (w.windSpeed || 0) * computeWindShearMultiplier(agl);
+    if (curWind < 0.3) {
+      if (windLevelEl) {
+        windLevelEl.textContent = '0級 靜風';
+        windLevelEl.style.color = '#ffffff';
+      }
+      windTextEl.textContent = 'CALM 0.0 m/s';
+      windTextEl.style.color = '#ffffff';
+    } else {
+      const wAng = w.windAngle || 0.4;
+      const wx = Math.cos(wAng) * curWind;
+      const wz = Math.sin(wAng) * curWind;
+
+      // Meteorological direction: direction FROM which wind blows
+      let fromDeg = (Math.atan2(-wx, wz) * (180 / Math.PI) + 360) % 360;
+      const cardinals = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+      const card = cardinals[Math.round(fromDeg / 22.5) % 16];
+      const arrowList = ['↓', '↙', '←', '↖', '↑', '↗', '→', '↘'];
+      const arrow = arrowList[Math.round(fromDeg / 45) % 8];
+
+      let beaufort = '1級 軟風';
+      let bColor = '#ffffff'; // Professional monochrome baseline
+      if (curWind >= 13.9) { beaufort = '7級 疾風'; bColor = '#ef4444'; }
+      else if (curWind >= 10.8) { beaufort = '6級 強風'; bColor = '#f87171'; }
+      else if (curWind >= 8.0) { beaufort = '5級 清風'; bColor = '#f59e0b'; }
+      else if (curWind >= 5.5) { beaufort = '4級 和風'; bColor = '#ffffff'; }
+      else if (curWind >= 3.4) { beaufort = '3級 微風'; bColor = '#ffffff'; }
+      else if (curWind >= 1.6) { beaufort = '2級 輕風'; bColor = '#ffffff'; }
+
+      if (windLevelEl) {
+        windLevelEl.textContent = beaufort;
+        windLevelEl.style.color = bColor;
+      }
+      const degStr = Math.round(fromDeg).toString().padStart(3, '0');
+      windTextEl.textContent = `${arrow} ${degStr}° ${card} ${curWind.toFixed(1)}m/s`;
+      windTextEl.style.color = bColor;
+    }
+  }
+
   const pitchDeg = Math.round((-drone.pitch * 180) / Math.PI);
   const rollDeg = Math.round((-drone.roll * 180) / Math.PI);
-  document.getElementById('hud-attitude').textContent = `P: ${pitchDeg}° / R: ${rollDeg}°`;
+  const attEl = document.getElementById('hud-attitude');
+  if (attEl) {
+    // Constant character length and sign padding prevents jittering
+    const pSign = pitchDeg > 0 ? '+' : (pitchDeg < 0 ? '-' : ' ');
+    const rSign = rollDeg > 0 ? '+' : (rollDeg < 0 ? '-' : ' ');
+    const pVal = Math.abs(pitchDeg).toString().padStart(2, '0');
+    const rVal = Math.abs(rollDeg).toString().padStart(2, '0');
+    attEl.textContent = `P:${pSign}${pVal}° R:${rSign}${rVal}°`;
+  }
+
+  const mb = document.getElementById('hud-mode-badge');
+  if (mb) {
+    mb.textContent = state.flightMode === 'sport' ? 'SPORT' : 'POS-HOLD';
+  }
+
+  const boostStatusEl = document.getElementById('hud-boost-status');
+  if (boostStatusEl) {
+    const isBoosting = pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight') || pressedKeys.has('KeyU');
+    boostStatusEl.textContent = isBoosting ? 'BOOST' : (isGroundedNow ? 'GROUND' : (hMps < 0.2 ? 'HOVER' : 'CRUISE'));
+    boostStatusEl.style.color = isBoosting ? '#f59e0b' : (isGroundedNow ? '#94a3b8' : '#ffffff');
+  }
+
+  updateGCSBottomHints();
 
   const horizonGroup = document.getElementById('horizon-dynamic-group');
   if (horizonGroup) {
@@ -9687,6 +10485,8 @@ function updateHUD(dt) {
   // Item 5: Telemetry card dimming in downward optic view
   const telemCard = document.getElementById('hud-telemetry-card');
   if (telemCard) telemCard.classList.toggle('dimmed', isDownCam);
+  const altCard = document.getElementById('hud-altitude-card');
+  if (altCard) altCard.classList.toggle('dimmed', isDownCam);
 
   if (isDownCam) {
     if (horizonSvg) horizonSvg.classList.add('hidden');
@@ -9875,9 +10675,9 @@ function drawCompassTape() {
   document.getElementById('hud-heading-text').textContent = `${String(Math.round(heading)).padStart(3, '0')}° ${cardDir}`;
 
   const pxPerDeg = 3.2;
-  compassCtx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
-  compassCtx.fillStyle = '#e2e8f0';
-  compassCtx.font = '600 11px "Segoe UI", sans-serif';
+  compassCtx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+  compassCtx.fillStyle = '#ffffff';
+  compassCtx.font = '700 11px "JetBrains Mono", monospace';
   compassCtx.textAlign = 'center';
 
   for (let deg = -90; deg <= 450; deg += 15) {
@@ -9888,30 +10688,37 @@ function drawCompassTape() {
     const normDeg = ((deg % 360) + 360) % 360;
     const isCardinal = normDeg % 45 === 0;
     compassCtx.beginPath();
-    compassCtx.moveTo(x, h - (isCardinal ? 14 : 8));
+    compassCtx.moveTo(x, h - (isCardinal ? 12 : 7));
     compassCtx.lineTo(x, h);
     compassCtx.stroke();
 
     if (isCardinal) {
       const label = dirs[Math.round(normDeg / 45) % 8];
-      compassCtx.fillStyle = label === 'N' ? '#00f0ff' : '#cbd5e1';
-      compassCtx.fillText(label, x, 15);
+      compassCtx.fillStyle = '#ffffff';
+      compassCtx.fillText(label, x, 14);
     }
   }
 }
 
 function drawTacticalMap(ctx, w, h, isFull) {
-  ctx.fillStyle = '#0b1329';
+  const wilderness = state.gameMode === 'tactical_strike';
+
+  ctx.clearRect(0, 0, w, h);
+  if (isFull) {
+    ctx.fillStyle = wilderness ? '#374a35' : '#273549';
+  } else {
+    // Semi-transparent tactical minimap terrain
+    ctx.fillStyle = wilderness ? 'rgba(55, 74, 53, 0.68)' : 'rgba(39, 53, 73, 0.68)';
+  }
   ctx.fillRect(0, 0, w, h);
 
   const width = CITY.maxX - CITY.minX;
   const depth = CITY.maxZ - CITY.minZ;
   const centerZ = (CITY.minZ + CITY.maxZ) / 2;
-  const wilderness = state.gameMode === 'tactical_strike';
   const mapCenterZ = wilderness ? -133 : (CITY_BOUNDS.north + CITY_BOUNDS.south) / 2;
   const mapWidth = wilderness ? 400 : CITY_BOUNDS.halfWidth * 2;
   const mapDepth = wilderness ? 365 : CITY_BOUNDS.south - CITY_BOUNDS.north;
-  const scale = Math.min((w - 16) / mapWidth, (h - 16) / mapDepth);
+  const scale = Math.min(w / mapWidth, h / mapDepth);
   const toMapX = wx => w / 2 + wx * scale;
   const toMapY = wz => h / 2 + (wz - mapCenterZ) * scale;
 
@@ -9920,7 +10727,6 @@ function drawTacticalMap(ctx, w, h, isFull) {
     ctx.fillRect(toMapX(x - width / 2), toMapY(z - depth / 2), width * scale, depth * scale);
   }
   if (wilderness) {
-    rectangle(0, mapCenterZ, mapWidth, mapDepth, '#374a35');
     ctx.strokeStyle = '#bb9d74';
     ctx.lineWidth = Math.max(1.2, 5 * scale);
     ctx.lineJoin = 'round';
@@ -9999,8 +10805,8 @@ function drawTacticalMap(ctx, w, h, isFull) {
     ctx.arc(returnX,returnY,2,0,Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 9px sans-serif';
-    ctx.fillText(returning ? '返航降落' : '返航點', returnX + landingRing + 3, returnY + 3);
+    ctx.font = '700 9px "JetBrains Mono", sans-serif';
+    ctx.fillText(returning ? 'RTH' : 'HOME', returnX + landingRing + 3, returnY + 3);
 
     // Draw Tactical Targets with Military Symbols
     tacticalState.targets.forEach((t) => {
@@ -10088,7 +10894,7 @@ function drawTacticalMap(ctx, w, h, isFull) {
     ctx.fill();
 
     // 6. Course Gates
-    const isTrainingMap = state.gameMode === 'training' || state.gameMode === 'single_race';
+    const isTrainingMap = state.gameMode === 'training';
     COURSE_GATES.forEach((g, idx) => {
       const gx = toMapX(g.pos.x);
       const gy = toMapY(g.pos.z);
@@ -10143,7 +10949,7 @@ function drawTacticalMap(ctx, w, h, isFull) {
   ctx.beginPath();
   ctx.arc(0, 0, isFull ? 6 : 4, 0, Math.PI * 2);
   ctx.fill();
-  ctx.restore();
+  ctx.restore(); // Restore drone rotation transform
 }
 
 // ============================================================================
@@ -10288,6 +11094,87 @@ function updateVTXOverlay(dt) {
   }
 
   vtxCtx.clearRect(0, 0, w, h);
+
+  if (drone.crashed) {
+    if (drone.crashState === 'tumbling') {
+      vtxCtx.save();
+      // 1. Digital glitch tearing horizontal slices & sync drop
+      const tG = performance.now() * 0.007;
+      const tearCount = 4 + Math.floor(Math.random() * 4);
+      for (let i = 0; i < tearCount; i++) {
+        const sliceY = (Math.sin(tG * 6.5 + i * 2.1) * 0.5 + 0.5) * h;
+        const sliceH = 8 + Math.random() * 32;
+        vtxCtx.fillStyle = Math.random() < 0.4 ? 'rgba(255, 255, 255, 0.35)' : 'rgba(0, 0, 0, 0.45)';
+        vtxCtx.fillRect(0, sliceY, w, sliceH);
+
+        // Random digital glitch pixel blocks
+        if (Math.random() < 0.6) {
+          vtxCtx.fillStyle = 'rgba(239, 68, 68, 0.42)';
+          vtxCtx.fillRect(Math.random() * (w - 140), sliceY, 140, sliceH);
+        }
+      }
+
+      // 2. High-speed chromatic / scanline bars
+      for (let i = 0; i < 3; i++) {
+        const barY = ((tG * 260 + i * 190) % h);
+        vtxCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+        vtxCtx.fillRect(0, barY, w, 4 + Math.random() * 12);
+      }
+
+      // 3. Urgent OSD Warnings
+      vtxCtx.font = 'bold 22px monospace';
+      vtxCtx.fillStyle = (Math.floor(performance.now() / 120) % 2 === 0) ? '#ef4444' : '#ffffff';
+      vtxCtx.textAlign = 'center';
+      vtxCtx.shadowColor = '#000';
+      vtxCtx.shadowBlur = 8;
+      vtxCtx.fillText('⚠️ CRITICAL SYSTEM FAILURE: LOSS OF CONTROL ⚠️', w * 0.5, h * 0.28);
+      vtxCtx.font = 'bold 15px monospace';
+      vtxCtx.fillStyle = '#f59e0b';
+      vtxCtx.fillText('IMU DESYNC・MOTOR UNBALANCED・FREE FALLING', w * 0.5, h * 0.33);
+
+      vtxCtx.restore();
+      return;
+    }
+
+    // Heavy analog TV snow / static noise & rolling scanline glitch (VTX Signal Lost)
+    vtxCtx.save();
+    vtxCtx.fillStyle = 'rgba(8, 10, 14, 0.94)';
+    vtxCtx.fillRect(0, 0, w, h);
+
+    const step = 4;
+    const nx = Math.ceil(w / step);
+    const ny = Math.ceil(h / step);
+    for (let y = 0; y < ny; y += 2) {
+      for (let x = 0; x < nx; x += 2) {
+        if (Math.random() < 0.38) {
+          const lum = Math.floor(Math.random() * 210 + 35);
+          vtxCtx.fillStyle = `rgb(${lum},${lum},${lum})`;
+          vtxCtx.fillRect(x * step, y * step, step * 2, step * 2);
+        }
+      }
+    }
+
+    const tG = performance.now() * 0.005;
+    for (let i = 0; i < 4; i++) {
+      const barY = ((tG * 160 + i * 230) % h);
+      const barH = 16 + Math.random() * 45;
+      vtxCtx.fillStyle = Math.random() < 0.5 ? 'rgba(255, 255, 255, 0.22)' : 'rgba(0, 0, 0, 0.45)';
+      vtxCtx.fillRect(0, barY, w, barH);
+    }
+
+    vtxCtx.font = 'bold 22px monospace';
+    vtxCtx.fillStyle = '#ef4444';
+    vtxCtx.textAlign = 'center';
+    vtxCtx.shadowColor = '#000';
+    vtxCtx.shadowBlur = 6;
+    vtxCtx.fillText('--- [ VTX SIGNAL LOST / 訊號中斷 ] ---', w * 0.5, h * 0.34);
+    vtxCtx.font = '15px monospace';
+    vtxCtx.fillStyle = '#f59e0b';
+    vtxCtx.fillText('TRANSMITTER RX: 0 dBm  |  TELEMETRY LINK DOWN', w * 0.5, h * 0.38);
+
+    vtxCtx.restore();
+    return;
+  }
 
   // 1. In Chase (Third-Person) mode, keep the view completely clean (external camera, no onboard VTX overlays)
   if (state.cameraMode !== 'chase') {
@@ -10447,6 +11334,43 @@ function toggleKeymapMode() {
   document.getElementById('key-bot-r3').hidden = !dual;
   document.getElementById('boost-hint-key').textContent = dual ? 'Shift' : 'F';
   clearAllKeys();
+  updateGCSBottomHints();
+}
+
+function updateGCSBottomHints() {
+  const hintsEl = document.getElementById('gcs-bottom-hints');
+  if (!hintsEl) return;
+  const isDual = state.keymapMode === 'dual';
+  const isTactical = state.gameMode === 'tactical_strike';
+  const bombSpan = isTactical ? '<span id="gcs-hint-bomb"><kbd>B</kbd> 投彈</span>' : '';
+
+  const cacheKey = `${state.keymapMode}_${isTactical}`;
+  if (hintsEl._lastKeymap === cacheKey) return;
+  hintsEl._lastKeymap = cacheKey;
+
+  if (isDual) {
+    hintsEl.innerHTML = `
+      <span><kbd>W</kbd>/<kbd>S</kbd> 升降</span>
+      <span><kbd>A</kbd>/<kbd>D</kbd> 轉向</span>
+      <span><kbd>↑</kbd>/<kbd>↓</kbd> 前後</span>
+      <span><kbd>←</kbd>/<kbd>→</kbd> 平移</span>
+      <span><kbd>Space</kbd> 懸停</span>
+      ${bombSpan}
+      <span><kbd>C</kbd> 視角</span>
+      <span><kbd>M</kbd> 航圖</span>
+    `;
+  } else {
+    hintsEl.innerHTML = `
+      <span><kbd>W</kbd>/<kbd>S</kbd> 前後</span>
+      <span><kbd>A</kbd>/<kbd>D</kbd> 平移</span>
+      <span><kbd>Q</kbd>/<kbd>E</kbd> 轉向</span>
+      <span><kbd>Shift</kbd>/<kbd>Ctrl</kbd> 升降</span>
+      <span><kbd>Space</kbd> 懸停</span>
+      ${bombSpan}
+      <span><kbd>C</kbd> 視角</span>
+      <span><kbd>M</kbd> 航圖</span>
+    `;
+  }
 }
 
 function toggleAudio() {
@@ -10469,6 +11393,16 @@ function toggleMenuModal(open) {
   if (m) {
     m.classList.toggle('hidden', !open);
     m.style.display = open ? 'flex' : 'none';
+    if (!open) {
+      if (typeof window.setSkyEyeMenuHologramVisible === 'function') {
+        window.setSkyEyeMenuHologramVisible(false);
+      }
+      if (playerDroneMesh && playerDroneMesh.tiltGroup) {
+        playerDroneMesh.tiltGroup.rotation.set(0, 0, 0);
+      }
+    } else if (typeof window.skipSkyEyeIntroToMenu === 'function' && window._skyEyeIntroCompletedOnce) {
+      window.skipSkyEyeIntroToMenu(true);
+    }
   }
 }
 
@@ -10482,6 +11416,184 @@ function togglePauseMenu(open) {
     document.getElementById('btn-abort-tactical').hidden =
       state.gameMode !== 'tactical_strike' || !state.raceActive;
     document.getElementById('btn-resume').focus();
+  }
+}
+
+function resetTargetTank(tank) {
+  const parts = tank.tankParts;
+  if (!parts) return;
+
+  // 1. Reset game state flags & kinematic metrics
+  tank.hp = tank.maxHp;
+  tank.destroyed = false;
+  tank.cookOff = false;
+  tank.coasting = false;
+  tank.coastSpeed = 0;
+  tank.speedX = 0;
+  tank.trackDamaged = false;
+  tank.brokenTrackRibbonAdded = false;
+  tank.coastSmokeTimer = 0;
+  tank.trackSmokeTimer = 0;
+  tank.wreckSmokeTimer = 0;
+  tank.hitCount = 0;
+  tank.stoppedAt = undefined;
+  if (tank.baseSpeed) tank.patrolSpeed = tank.baseSpeed;
+  if (tank.spawnPos) {
+    tank.mesh.position.copy(tank.spawnPos);
+    tank.pos = tank.mesh.position;
+  }
+  if (typeof tank.spawnDir === 'number') {
+    tank.patrolDir = tank.spawnDir;
+  }
+  alignTankToRoad(tank);
+  updateTankThermalSignature(tank, 0);
+
+  // 2. Remove persistent wreck fire & lights
+  if (tank.wreckFire) {
+    if (tank.wreckFire.group && tank.wreckFire.group.parent) {
+      tank.wreckFire.group.parent.remove(tank.wreckFire.group);
+    }
+    if (tank.wreckFire.sprites) {
+      tank.wreckFire.sprites.forEach(s => {
+        if (s.sprite && s.sprite.material) s.sprite.material.dispose();
+      });
+    }
+    if (tank.wreckFire.light) {
+      tank.wreckFire.light.dispose();
+    }
+    tank.wreckFire = null;
+  }
+
+  // 3. Clear all dynamic damageGroup children (craters, broken track ribbons, fire groups)
+  if (parts.damageGroup) {
+    while (parts.damageGroup.children.length > 0) {
+      const child = parts.damageGroup.children[0];
+      parts.damageGroup.remove(child);
+      disposeWorldObject(child);
+    }
+  }
+
+  // 4. Reset turret, cannon barrel, fume extractor, cupola hatch & antenna
+  if (tank.turret) {
+    tank.turret.visible = true;
+    tank.turret.position.set(0, 1.38, -0.2);
+    tank.turret.rotation.set(0, 0, 0);
+    tank.turretTargetYaw = 0;
+    tank.turretWait = 9 + Math.random() * 14;
+  }
+  if (parts.barrel) {
+    parts.barrel.position.set(0, 0.05, -2.6);
+    parts.barrel.rotation.set(0, 0, 0);
+  }
+  if (parts.fumeExtractor) {
+    parts.fumeExtractor.position.set(0, 0.05, -2.82);
+    parts.fumeExtractor.rotation.set(0, 0, 0);
+  }
+  if (parts.cupolaHatch) {
+    parts.cupolaHatch.position.set(0.76, 0.54, 0.4);
+    parts.cupolaHatch.rotation.set(0, 0, 0);
+  }
+  if (parts.antennaMesh) {
+    parts.antennaMesh.position.set(0.66, 0.81, 1.36);
+    parts.antennaMesh.rotation.set(0, 0, -0.18);
+  }
+
+  // 5. Hide internal breach wells
+  if (parts.turretRingWell) parts.turretRingWell.visible = false;
+  if (parts.engineBreachWell) parts.engineBreachWell.visible = false;
+
+  // 6. Reset side skirts, ERA deck tiles, stowage boxes & engine vents
+  if (parts.skirts && Array.isArray(parts.skirts)) {
+    parts.skirts.forEach((s) => {
+      s.detached = false;
+      s.mesh.visible = true;
+      if (s.seamMesh) s.seamMesh.visible = true;
+      s.mesh.position.set(s.side * 1.84, 0.97, s.z);
+      s.mesh.rotation.set(0, 0, 0);
+    });
+  }
+  if (parts.deckTiles && Array.isArray(parts.deckTiles)) {
+    parts.deckTiles.forEach((tile) => {
+      tile.visible = true;
+      tile.rotation.set(-0.32, 0, 0);
+    });
+  }
+  if (parts.stowageBoxes && Array.isArray(parts.stowageBoxes)) {
+    parts.stowageBoxes.forEach((box) => {
+      box.visible = true;
+    });
+  }
+  if (parts.engineVents && Array.isArray(parts.engineVents)) {
+    parts.engineVents.forEach((v, i) => {
+      v.visible = true;
+      v.position.set(0, 1.24, 1.26 + i * 0.15);
+      v.rotation.set(0, 0, 0);
+    });
+  }
+
+  // 7. Reset wheel groups (axle rotation & position)
+  if (parts.wheelGroups && Array.isArray(parts.wheelGroups)) {
+    parts.wheelGroups.forEach((axle) => {
+      axle.rotation.set(0, 0, 0);
+      axle.position.y = 0.39;
+    });
+  }
+
+  // 8. Restore pristine factory camouflage texture & materials
+  if (parts.camouflageCanvas && parts.camouflageCtx && parts.camouflageTexture) {
+    drawPristineTankCamouflage(parts.camouflageCanvas, parts.camouflageCtx, parts.colorHex || 0x3d4d35);
+    parts.camouflageTexture.needsUpdate = true;
+  }
+  if (tank.armorMat) {
+    tank.armorMat.color.setHex(0xffffff);
+    tank.armorMat.roughness = 0.8;
+    tank.armorMat.metalness = 0.19;
+    tank.armorMat.needsUpdate = true;
+  }
+}
+
+function resetFacilityTarget(t) {
+  t.destroyed = false;
+  t.hp = t.maxHp;
+  t.hitCount = 0;
+  t.wreckSmokeTimer = 0;
+  if (t.thermal) updateRadarThermalSignature(t, 0);
+
+  if (t.wreckFire) {
+    if (t.wreckFire.group && t.wreckFire.group.parent) {
+      t.wreckFire.group.parent.remove(t.wreckFire.group);
+    }
+    if (t.wreckFire.sprites) {
+      t.wreckFire.sprites.forEach(s => {
+        if (s.sprite && s.sprite.material) s.sprite.material.dispose();
+      });
+    }
+    if (t.wreckFire.light) t.wreckFire.light.dispose();
+    t.wreckFire = null;
+  }
+
+  if (t.mesh) {
+    t.mesh.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      child.visible = true;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => {
+        if (m && m.userData?.wreckScorched) {
+          if (typeof m.userData.origHex === 'number') m.color.setHex(m.userData.origHex);
+          if (typeof m.userData.origRough === 'number') m.roughness = m.userData.origRough;
+          m.userData.wreckScorched = false;
+        }
+      });
+    });
+  }
+
+  if (t.type === 'radar') {
+    if (t.dish) t.dish.visible = true;
+  }
+  if (t.type === 'ammo') {
+    if (t.mesh && t.mesh.children) {
+      t.mesh.children.forEach(part => { part.visible = true; });
+    }
   }
 }
 
@@ -10518,6 +11630,11 @@ async function startRunSequence(playerNum = 1) {
   if (landingInd) {
     landingInd.classList.remove('visible');
   }
+  drone.crashed = false;
+  drone.crashState = 'none';
+  drone.tumbleTimer = 0;
+  const crashOverlay = document.getElementById('crash-overlay');
+  if (crashOverlay) crashOverlay.classList.add('hidden');
 
   state.currentPlayer = playerNum;
   state.elapsedTime = 0;
@@ -10529,7 +11646,7 @@ async function startRunSequence(playerNum = 1) {
   state.recordSampleAccum = 0;
   state.lastCheckpoint = { pos: { x: 0, y: 1.2, z: 0 }, yaw: 0 };
 
-  const isTrainingRun = state.gameMode === 'training' || state.gameMode === 'single_race';
+  const isTrainingRun = state.gameMode === 'training';
   if (isTrainingRun) {
     state.trainingStep = 1;
     state.trainingHoverTime = 0;
@@ -10537,18 +11654,20 @@ async function startRunSequence(playerNum = 1) {
   }
 
   resetDroneTransform(0, 1.2, 0, 0);
+  resetDroneBattery();
   updateGateVisualStates();
 
   const modeLabels = {
-    training: '新手飛行訓練',
-    single_race: '單人競速挑戰',
+    training: '飛行訓練',
+    single_race: '單人計時賽',
     versus_race: '雙人競速',
     free_flight: '城市自由空拍',
-    tactical_strike: '戰場投彈'
+    tactical_strike: '實戰演練'
   };
 
   const isTacticalMode = state.gameMode === 'tactical_strike';
   if (ccipMarkerMesh) ccipMarkerMesh.visible = false;
+  if (typeof resetGimbalPod === 'function') resetGimbalPod();
 
   if (isTacticalMode) {
     tacticalState.bombsRemaining = tacticalState.maxBombs;
@@ -10557,51 +11676,19 @@ async function startRunSequence(playerNum = 1) {
     tacticalState.rearmTimer = 0;
     state.tacticalVictoryAnnounced = false;
 
-    // Reset all targets
+    // Reset all targets to 100% pristine condition
     tacticalState.targets.forEach((t) => {
-      t.destroyed = false;
-      t.coasting = false;
-      t.coastSpeed = 0;
-      t.trackDamaged = false;
-      if (t.baseSpeed) t.patrolSpeed = t.baseSpeed;
-      if (t.thermal) {
-        if (t.type === 'tank') updateTankThermalSignature(t, 0);
-        else if (t.type === 'radar') updateRadarThermalSignature(t, 0);
-      }
-      t.hp = t.maxHp;
-      if (t.wreckFire && (t.type === 'radar' || t.type === 'ammo')) {
-        if (t.wreckFire.group && t.wreckFire.group.parent) {
-          t.wreckFire.group.parent.remove(t.wreckFire.group);
-        }
-        t.wreckFire = null;
-        t.mesh.traverse((child) => {
-          if (!child.isMesh || !child.material) return;
-          const mats = Array.isArray(child.material) ? child.material : [child.material];
-          mats.forEach((m) => {
-            if (m && m.userData?.wreckScorched) {
-              if (typeof m.userData.origHex === 'number') m.color.setHex(m.userData.origHex);
-              if (typeof m.userData.origRough === 'number') m.roughness = m.userData.origRough;
-              m.userData.wreckScorched = false;
-            }
-          });
-        });
-      }
-      if (t.type === 'ammo') t.mesh.children.forEach(part => { part.visible = true; });
-      if (t.dish) t.dish.visible = true;
-      if (t.armorMat) t.armorMat.color.setHex(0xffffff);
-      if (t.turret) {
-        t.turret.visible = true;
-        t.turret.position.y = 1.38;
-        t.turret.rotation.set(0,0,0);
-        t.turretTargetYaw = 0;
-        t.turretWait = 9 + Math.random() * 14;
+      if (t.type === 'tank') {
+        resetTargetTank(t);
+      } else {
+        resetFacilityTarget(t);
       }
     });
 
     updateDroneBellyBombs();
   }
   const mb = document.getElementById('hud-mode-badge');
-  if (mb) mb.textContent = modeLabels[state.gameMode] || '飛行操控訓練';
+  if (mb) mb.textContent = state.flightMode === 'sport' ? 'SPORT' : 'POS-HOLD';
   const pl = document.getElementById('hud-player-label');
   if (pl) pl.textContent = isTrainingRun ? 'TRAINEE' : `PLAYER ${playerNum}`;
 
@@ -10627,6 +11714,11 @@ async function startRunSequence(playerNum = 1) {
 function completeRaceRun({ aborted = false } = {}) {
   state.raceActive = false;
   clearAllKeys();
+  drone.crashed = false;
+  drone.crashState = 'none';
+  drone.tumbleTimer = 0;
+  const crashOverlay = document.getElementById('crash-overlay');
+  if (crashOverlay) crashOverlay.classList.add('hidden');
   if (!aborted) audioEngine.playFinishFanfare();
 
   const finalTime = state.elapsedTime + state.penaltyTime;
@@ -10646,9 +11738,12 @@ function completeRaceRun({ aborted = false } = {}) {
       document.getElementById('landing-indicator').classList.remove('visible');
     }
     showScoreboardModal('tactical_complete', { aborted });
-  } else if (state.gameMode === 'training' || state.gameMode === 'single_race') {
+  } else if (state.gameMode === 'training') {
     state.p1Result = result;
     showScoreboardModal('training_complete');
+  } else if (state.gameMode === 'single_race') {
+    state.p1Result = result;
+    showScoreboardModal('single');
   } else if (state.gameMode === 'versus_race') {
     if (state.currentPlayer === 1) {
       state.p1Result = result;
@@ -10920,6 +12015,10 @@ function bindUIEvents() {
   document.getElementById('btn-flight-mode').addEventListener('click', toggleFlightMode);
   document.getElementById('btn-keymap').addEventListener('click', toggleKeymapMode);
   document.getElementById('btn-reset').addEventListener('click', () => respawnAtLastCheckpoint(false));
+  const btnCrashRespawn = document.getElementById('btn-crash-respawn');
+  if (btnCrashRespawn) {
+    btnCrashRespawn.addEventListener('click', () => respawnAtLastCheckpoint(true));
+  }
   document.getElementById('btn-audio').addEventListener('click', toggleAudio);
   document.getElementById('btn-resume').addEventListener('click', () => togglePauseMenu(false));
   document.getElementById('btn-abort-tactical').addEventListener('click', () => {
@@ -10932,26 +12031,433 @@ function bindUIEvents() {
     toggleMenuModal(true);
   });
 
-  document.querySelectorAll('.mode-select-card').forEach((card) => {
+  const TACTICAL_EXERCISE_BRIEFINGS = {
+    tactical_strike: {
+      eyebrow: '任務提示 // OP-01 標準實戰',
+      title: '山谷前線行動：戰場投彈',
+      bg: '山谷前線爆發交火。敵軍裝甲巡邏隊控制了谷底道路，山脊雷達站與坡腳彈藥庫仍在運作。你在山脊背坡的臨時放飛點待命，執行日間標準打擊任務。',
+      label: '實戰演練 — 01 戰場投彈'
+    },
+    night_strike: {
+      eyebrow: '任務提示 // OP-02 暗夜奇襲',
+      title: '暗夜獵鷹行動：夜間突擊',
+      bg: '夜幕籠罩山谷前線，敵軍裝甲與防空雷達於暗夜中持續運作。機載系統已自動切換為白熱熱成像（FLIR），請透過引擎與雷達高熱源特徵鎖定並摧毀敵方目標。',
+      label: '實戰演練 — 02 夜間突擊'
+    },
+    extreme_weather: {
+      eyebrow: '任務提示 // OP-03 惡劣天候',
+      title: '風暴獵殺行動：極限飛行（惡劣天候）',
+      bg: '強烈颱風驟雨席捲山谷前線，伴隨劇烈側風與亂流下壓氣流。請維持機體抗風穩定，並善用垂直光學鏡頭的風偏修正標記與 CCIP 預測彈道執行極限投彈。',
+      label: '實戰演練 — 03 極限飛行（惡劣天候）'
+    }
+  };
+
+  state.tacticalExercise = 'tactical_strike';
+  state.selectedRaceSubmode = 'single_race';
+  state.activeMenuCategory = 'training';
+
+  const TIER2_BANNER_INFO = {
+    training: {
+      tag: 'SECTOR 01 // FLIGHT ACADEMY',
+      title: '飛行訓練 — 六階段飛控考照課綱',
+      color: '#10b981'
+    },
+    racing: {
+      tag: 'SECTOR 02 // URBAN SPEED CIRCUIT',
+      title: '飛行競速 — 台灣城市賽道模式選擇',
+      color: '#00f0ff'
+    },
+    tactical: {
+      tag: 'SECTOR 03 // FRONTIER STRIKE OPS',
+      title: '實戰演練 — 山谷前線戰術科目部署',
+      color: '#ef4444'
+    }
+  };
+
+  function updateMissionSummaryPill(label, accentColor = '#00f0ff') {
+    const labelEl = document.getElementById('menu-active-mission-label');
+    if (labelEl) labelEl.textContent = label;
+    const dotEl = document.querySelector('#menu-selected-mission-pill .mission-pill-dot');
+    if (dotEl) {
+      dotEl.style.background = accentColor;
+      dotEl.style.boxShadow = `0 0 8px ${accentColor}`;
+    }
+  }
+
+  function updateTacticalBriefingDialog(exerciseKey) {
+    const info = TACTICAL_EXERCISE_BRIEFINGS[exerciseKey] || TACTICAL_EXERCISE_BRIEFINGS.tactical_strike;
+    const eyebrowEl = document.getElementById('tactical-briefing-eyebrow');
+    const titleEl = document.getElementById('tactical-briefing-title');
+    const bgEl = document.getElementById('tactical-briefing-bg');
+    if (eyebrowEl) eyebrowEl.textContent = info.eyebrow;
+    if (titleEl) titleEl.textContent = info.title;
+    if (bgEl) bgEl.textContent = info.bg;
+  }
+
+  function animateSubmenuPanelReveal(panelEl) {
+    if (!panelEl || typeof gsap === 'undefined') return;
+    gsap.killTweensOf(panelEl);
+    gsap.fromTo(
+      panelEl,
+      { opacity: 0, y: 10 },
+      { opacity: 1, y: 0, duration: 0.32, ease: 'power2.out', clearProps: 'transform' }
+    );
+    const items = panelEl.querySelectorAll('.submode-option, .syllabus-chip');
+    if (items.length) {
+      gsap.killTweensOf(items);
+      gsap.fromTo(
+        items,
+        { opacity: 0, y: 12, scale: 0.96 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.36, stagger: 0.05, ease: 'back.out(1.4)', clearProps: 'transform' }
+      );
+    }
+  }
+
+  function applyCategoryVisualTheme(category) {
+    const rpmText = document.getElementById('menu-rotor-rpm-text');
+    const pill = document.getElementById('menu-rotor-status-pill');
+    const bannerTag = document.getElementById('tier2-banner-tag');
+    const bannerTitle = document.getElementById('tier2-banner-title');
+    const bannerInfo = TIER2_BANNER_INFO[category] || TIER2_BANNER_INFO.training;
+
+    if (bannerTag) {
+      bannerTag.textContent = bannerInfo.tag;
+      bannerTag.style.color = bannerInfo.color;
+    }
+    if (bannerTitle) {
+      bannerTitle.textContent = bannerInfo.title;
+    }
+
+    document.querySelectorAll('.tier2-tab').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.targetCategory === category);
+    });
+
+    if (category === 'training') {
+      if (rpmText) rpmText.textContent = 'AVIONICS // ACADEMY LINK READY';
+      if (pill) {
+        pill.style.borderColor = 'rgba(16, 185, 129, 0.45)';
+        pill.style.color = '#34d399';
+        pill.style.background = 'rgba(16, 185, 129, 0.12)';
+      }
+    } else if (category === 'racing') {
+      if (rpmText) rpmText.textContent = 'AVIONICS // SPORT TELEMETRY ARMED';
+      if (pill) {
+        pill.style.borderColor = 'rgba(0, 240, 255, 0.5)';
+        pill.style.color = '#00f0ff';
+        pill.style.background = 'rgba(0, 240, 255, 0.14)';
+      }
+    } else if (category === 'tactical') {
+      if (rpmText) rpmText.textContent = 'AVIONICS // STRIKE WEAPONS ARMED';
+      if (pill) {
+        pill.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+        pill.style.color = '#f87171';
+        pill.style.background = 'rgba(239, 68, 68, 0.14)';
+      }
+    }
+
+    if (typeof window.setSkyEyeHudSectorAccent === 'function') {
+      window.setSkyEyeHudSectorAccent(category);
+    }
+  }
+
+  function selectRaceSubmode(raceMode, { animate = false } = {}) {
+    state.selectedRaceSubmode = raceMode === 'versus_race' ? 'versus_race' : 'single_race';
+    state.gameMode = state.selectedRaceSubmode;
+
+    const raceCard = document.querySelector('.mode-select-card[data-category="racing"]');
+    if (raceCard) raceCard.dataset.mode = state.selectedRaceSubmode;
+
+    document.querySelectorAll('.race-sub-option').forEach((btn) => {
+      const active = btn.dataset.raceMode === state.selectedRaceSubmode;
+      btn.classList.toggle('selected', active);
+      btn.setAttribute('aria-pressed', String(active));
+      if (active && btn.dataset.description) {
+        const sumEl = document.getElementById('menu-summary-mode');
+        if (sumEl) sumEl.textContent = btn.dataset.description;
+      }
+    });
+
+    const label = state.selectedRaceSubmode === 'versus_race'
+      ? '飛行競速 — 02 雙人競速'
+      : '飛行競速 — 01 單人計時賽';
+    updateMissionSummaryPill(label, '#00f0ff');
+    if (animate && typeof gsap !== 'undefined') {
+      const sumEl = document.getElementById('menu-summary-mode');
+      if (sumEl) gsap.fromTo(sumEl, { opacity: 0.25, x: -6 }, { opacity: 1, x: 0, duration: 0.25 });
+    }
+  }
+
+  function selectTacticalExercise(exerciseKey, { applyPresets = true } = {}) {
+    const validKey = TACTICAL_EXERCISE_BRIEFINGS[exerciseKey] ? exerciseKey : 'tactical_strike';
+    state.tacticalExercise = validKey;
+    state.gameMode = 'tactical_strike';
+
+    document.querySelectorAll('.exercise-option').forEach((item) => {
+      const active = item.dataset.exercise === validKey;
+      item.classList.toggle('selected', active);
+      item.setAttribute('aria-pressed', String(active));
+      if (active) {
+        if (item.dataset.description) {
+          const sumEl = document.getElementById('menu-summary-mode');
+          if (sumEl) sumEl.textContent = item.dataset.description;
+        }
+        if (applyPresets) {
+          if (item.dataset.presetTime) applyTimeOfDay(item.dataset.presetTime);
+          if (item.dataset.presetWeather) applyWeather(item.dataset.presetWeather);
+          if (item.dataset.presetSensor && typeof setSensorMode === 'function') {
+            setSensorMode(item.dataset.presetSensor);
+          }
+        }
+      }
+    });
+
+    updateTacticalBriefingDialog(validKey);
+    const info = TACTICAL_EXERCISE_BRIEFINGS[validKey];
+    updateMissionSummaryPill(info.label, '#ef4444');
+  }
+
+  function selectMenuCategory(cardOrCategory, { applyPresets = false } = {}) {
+    const card = typeof cardOrCategory === 'string'
+      ? document.querySelector(`.mode-select-card[data-category="${cardOrCategory}"]`)
+      : cardOrCategory;
+    if (!card) return;
+
+    const category = card.dataset.category || (
+      card.dataset.mode === 'tactical_strike' ? 'tactical' :
+      (card.dataset.mode === 'versus_race' || card.dataset.mode === 'single_race') ? 'racing' : 'training'
+    );
+    state.activeMenuCategory = category;
+
+    document.querySelectorAll('.mode-select-card').forEach((c) => {
+      const isSelected = c === card;
+      c.classList.toggle('selected', isSelected);
+      c.setAttribute('aria-selected', String(isSelected));
+      if (c.hasAttribute('aria-expanded')) {
+        c.setAttribute('aria-expanded', String(isSelected));
+      }
+    });
+
+    const trainingPanel = document.getElementById('submenu-training');
+    const racingPanel = document.getElementById('submenu-racing');
+    const tacticalPanel = document.getElementById('exercise-selector');
+
+    if (trainingPanel) trainingPanel.classList.toggle('hidden', category !== 'training');
+    if (racingPanel) racingPanel.classList.toggle('hidden', category !== 'racing');
+    if (tacticalPanel) tacticalPanel.classList.toggle('hidden', category !== 'tactical');
+
+    applyCategoryVisualTheme(category);
+
+    if (category === 'training') {
+      state.gameMode = 'training';
+      if (state.sensorMode !== 'visible' && typeof setSensorMode === 'function') {
+        setSensorMode('visible');
+      }
+      const sumEl = document.getElementById('menu-summary-mode');
+      if (sumEl && card.dataset.description) sumEl.textContent = card.dataset.description;
+      updateMissionSummaryPill('飛行訓練 — 六階段考照課綱', '#10b981');
+      animateSubmenuPanelReveal(trainingPanel);
+    } else if (category === 'racing') {
+      if (state.sensorMode !== 'visible' && typeof setSensorMode === 'function') {
+        setSensorMode('visible');
+      }
+      selectRaceSubmode(state.selectedRaceSubmode || 'single_race');
+      animateSubmenuPanelReveal(racingPanel);
+    } else if (category === 'tactical') {
+      selectTacticalExercise(state.tacticalExercise || 'tactical_strike', { applyPresets });
+      animateSubmenuPanelReveal(tacticalPanel);
+    }
+  }
+
+  // Transition from Stage 1 (Tier-1 3-Mode Hero Screen) -> Stage 2 (Tier-2 Advanced Details Deck)
+  function enterTier2Screen(category) {
+    const menuModal = document.getElementById('menu-modal');
+    const introStage = document.getElementById('intro-cinematic-stage');
+    const tier1Stage = document.getElementById('hero-tier1-stage');
+    const commandDeck = document.getElementById('menu-command-deck');
+    if (!commandDeck || !tier1Stage) return;
+
+    if (menuModal) menuModal.classList.add('tier2-active');
+    commandDeck.classList.remove('tier2-hidden');
+
+    if (typeof window.setSkyEyeMenuStage === 'function') {
+      window.setSkyEyeMenuStage('tier2', category || state.activeMenuCategory || 'training');
+    }
+    if (typeof window.setSkyEyeMenuHologramVisible === 'function') {
+      window.setSkyEyeMenuHologramVisible(false);
+    }
+
+    if (typeof gsap !== 'undefined') {
+      gsap.killTweensOf([introStage, tier1Stage, commandDeck]);
+      if (introStage) {
+        gsap.to(introStage, {
+          autoAlpha: 0,
+          duration: 0.3,
+          ease: 'power2.out'
+        });
+      }
+      gsap.to(tier1Stage, {
+        autoAlpha: 0,
+        scale: 1.05,
+        duration: 0.3,
+        ease: 'power3.inOut',
+        onComplete: () => {
+          tier1Stage.classList.add('tier1-hidden');
+        }
+      });
+
+      gsap.fromTo(
+        commandDeck,
+        { autoAlpha: 0, y: 28, scale: 0.95 },
+        {
+          autoAlpha: 1,
+          y: 0,
+          scale: 1,
+          duration: 0.48,
+          ease: 'expo.out',
+          onStart: () => {
+            commandDeck.style.pointerEvents = 'auto';
+          }
+        }
+      );
+
+      gsap.fromTo(
+        ['#menu-command-deck .tier2-mode-banner', '#menu-command-deck #submenu-stage', '#menu-command-deck .menu-settings', '#menu-command-deck .menu-cta-bar'],
+        { opacity: 0, y: 14 },
+        { opacity: 1, y: 0, duration: 0.42, stagger: 0.055, ease: 'power3.out', clearProps: 'transform' }
+      );
+    } else {
+      if (introStage) introStage.style.opacity = '0';
+      tier1Stage.classList.add('tier1-hidden');
+      commandDeck.style.opacity = '1';
+      commandDeck.style.visibility = 'visible';
+      commandDeck.style.pointerEvents = 'auto';
+    }
+  }
+
+  // Transition from Stage 2 (Tier-2 Advanced Details Deck) -> Stage 1 (Tier-1 3-Mode Hero Screen)
+  function returnToTier1Screen() {
+    const menuModal = document.getElementById('menu-modal');
+    const introStage = document.getElementById('intro-cinematic-stage');
+    const tier1Stage = document.getElementById('hero-tier1-stage');
+    const commandDeck = document.getElementById('menu-command-deck');
+    if (!commandDeck || !tier1Stage) return;
+
+    if (menuModal) menuModal.classList.remove('tier2-active');
+    tier1Stage.classList.remove('tier1-hidden');
+
+    if (typeof window.setSkyEyeMenuStage === 'function') {
+      window.setSkyEyeMenuStage('tier1', state.activeMenuCategory || 'training');
+    }
+    if (typeof window.setSkyEyeMenuHologramVisible === 'function') {
+      window.setSkyEyeMenuHologramVisible(true);
+    }
+
+    if (typeof gsap !== 'undefined') {
+      gsap.killTweensOf([introStage, tier1Stage, commandDeck]);
+      commandDeck.style.pointerEvents = 'none';
+      gsap.to(commandDeck, {
+        autoAlpha: 0,
+        y: 22,
+        scale: 0.96,
+        duration: 0.3,
+        ease: 'power3.inOut',
+        onComplete: () => {
+          commandDeck.classList.add('tier2-hidden');
+        }
+      });
+
+      if (introStage) {
+        gsap.to(introStage, {
+          autoAlpha: 1,
+          duration: 0.42,
+          ease: 'power2.out'
+        });
+      }
+      gsap.fromTo(
+        tier1Stage,
+        { autoAlpha: 0, scale: 0.96 },
+        { autoAlpha: 1, scale: 1, duration: 0.44, ease: 'expo.out' }
+      );
+      gsap.fromTo(
+        '.hero-mode-node',
+        { autoAlpha: 0, y: 24, scale: 0.94 },
+        { autoAlpha: 1, y: 0, scale: 1, duration: 0.44, stagger: 0.08, ease: 'back.out(1.5)' }
+      );
+    } else {
+      if (introStage) introStage.style.opacity = '1';
+      commandDeck.classList.add('tier2-hidden');
+      tier1Stage.style.opacity = '1';
+      tier1Stage.style.visibility = 'visible';
+    }
+  }
+
+  window.enterSkyEyeTier2 = enterTier2Screen;
+  window.returnToSkyEyeTier1 = returnToTier1Screen;
+
+  // Bind Tier-1 Mode Nodes: Click enters Tier-2; Hover tilts 3D UAV & highlights leader lines
+  document.querySelectorAll('.mode-select-card').forEach((card, idx) => {
     card.addEventListener('click', () => {
-      document.querySelectorAll('.mode-select-card').forEach((c) => c.classList.remove('selected'));
-      card.classList.add('selected');
-      state.gameMode = card.dataset.mode;
-      document.getElementById('menu-summary-mode').textContent = card.dataset.description;
-      document.getElementById('exercise-selector').classList.toggle('hidden', card.dataset.mode !== 'tactical_strike');
-      document.querySelector('[data-mode="tactical_strike"]').setAttribute('aria-expanded', String(card.dataset.mode === 'tactical_strike'));
+      const cat = card.dataset.category || 'training';
+      audioEngine.playMenuConfirm();
+      selectMenuCategory(card, { applyPresets: true });
+      enterTier2Screen(cat);
+    });
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const cat = card.dataset.category || 'training';
+        audioEngine.playMenuConfirm();
+        selectMenuCategory(card, { applyPresets: true });
+        enterTier2Screen(cat);
+      }
+    });
+    card.addEventListener('pointerenter', () => {
+      const cat = card.dataset.category || 'training';
+      audioEngine.playMenuHover();
+      if (typeof window.setSkyEyeHudHoverSector === 'function') {
+        window.setSkyEyeHudHoverSector(idx + 1, cat);
+      }
+    });
+    card.addEventListener('pointerleave', () => {
+      if (typeof window.setSkyEyeHudHoverSector === 'function') {
+        window.setSkyEyeHudHoverSector(0, state.activeMenuCategory);
+      }
+    });
+  });
+
+  // Bind Tier-2 Back button & Quick-Switch Tabs
+  const btnBackTier1 = document.getElementById('btn-back-tier1');
+  if (btnBackTier1) {
+    btnBackTier1.addEventListener('click', () => {
+      audioEngine.playMenuConfirm();
+      returnToTier1Screen();
+    });
+  }
+
+  document.querySelectorAll('.tier2-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const targetCat = tab.dataset.targetCategory;
+      if (targetCat) {
+        audioEngine.playMenuConfirm();
+        selectMenuCategory(targetCat, { applyPresets: true });
+        if (typeof window.setSkyEyeMenuStage === 'function') {
+          window.setSkyEyeMenuStage('tier2', targetCat);
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll('.race-sub-option').forEach((option) => {
+    option.addEventListener('click', () => {
+      audioEngine.playMenuConfirm();
+      selectRaceSubmode(option.dataset.raceMode, { animate: true });
     });
   });
 
   document.querySelectorAll('.exercise-option').forEach((option) => {
     option.addEventListener('click', () => {
-      document.querySelectorAll('.exercise-option').forEach((item) => {
-        item.classList.remove('selected');
-        item.setAttribute('aria-pressed', 'false');
-      });
-      option.classList.add('selected');
-      option.setAttribute('aria-pressed', 'true');
-      state.gameMode = option.dataset.exercise;
+      audioEngine.playMenuConfirm();
+      selectTacticalExercise(option.dataset.exercise, { applyPresets: true });
     });
   });
 
@@ -11099,8 +12605,10 @@ async function loadWorldForMode(mode) {
   const overlay = document.getElementById('world-loading');
   const title = document.getElementById('world-loading-title');
   const detail = document.getElementById('world-loading-detail');
-  title.textContent = tactical ? '載入野外戰場' : '載入台灣城市';
-  detail.textContent = '準備切換場景';
+  const progressBar = document.getElementById('world-loading-progress') || (overlay ? overlay.querySelector('progress') : null);
+  if (title) title.textContent = tactical ? '載入野外戰場' : '載入台灣城市';
+  if (progressBar) progressBar.value = 5;
+  if (detail) detail.textContent = '準備切換場景 (5%)';
   worldLoading = true;
   clearAllKeys();
   overlay.classList.remove('hidden');
@@ -11110,15 +12618,29 @@ async function loadWorldForMode(mode) {
     if (tactical) unloadCityWorld();
     else unloadWildernessWorld();
 
+    if (progressBar) progressBar.value = 15;
+    if (detail) detail.textContent = '釋放舊場景資源 (15%)';
+    await letLoadingScreenPaint();
+
     const stages = tactical ? buildWildernessBattlefield() : buildCityWorld();
+    const totalStages = tactical ? 6 : 5;
+    let stageCount = 0;
     let sliceStart = performance.now();
     for (const stage of stages) {
-      if (stage) detail.textContent = stage;
+      stageCount++;
+      const pct = Math.min(95, Math.round(15 + (stageCount / totalStages) * 75));
+      if (progressBar) progressBar.value = pct;
+      if (stage && detail) {
+        detail.textContent = `${stage} (${pct}%)`;
+      }
       if (stage || performance.now() - sliceStart >= 12) {
         await letLoadingScreenPaint();
         sliceStart = performance.now();
       }
     }
+    if (progressBar) progressBar.value = 100;
+    if (detail) detail.textContent = '場景載入完成 (100%)';
+    await letLoadingScreenPaint();
     return true;
   } catch (error) {
     console.error('World load failed:', error);
@@ -11130,7 +12652,754 @@ async function loadWorldForMode(mode) {
   } finally {
     worldLoading = false;
     overlay.classList.add('hidden');
+    if (progressBar) progressBar.value = 0;
   }
+}
+
+function initSkyEyeIntroAndMenu() {
+  if (typeof gsap === 'undefined') return;
+
+  const menuModal = document.getElementById('menu-modal');
+  const tier1Stage = document.getElementById('hero-tier1-stage');
+  const commandDeck = document.getElementById('menu-command-deck');
+  const skipBtn = document.getElementById('btn-skip-intro');
+  const phaseReadout = document.getElementById('intro-phase-readout');
+  const thrustReadout = document.getElementById('intro-thrust-state');
+
+  const imuTickerEl = document.getElementById('intro-imu-ticker');
+  const attitudeTickerEl = document.getElementById('intro-attitude-ticker');
+  const radarTickerEl = document.getElementById('intro-radar-ticker');
+  const powerTickerEl = document.getElementById('intro-power-ticker');
+  const coordsTickerEl = document.getElementById('intro-coords-ticker');
+
+  const hdgEl = document.getElementById('intro-hdg-val');
+  const altEl = document.getElementById('intro-alt-val');
+  const spdEl = document.getElementById('intro-spd-val');
+  const pitchEl = document.getElementById('intro-pitch-val');
+
+  const hudReticleCore = document.getElementById('hud-reticle-core');
+  const hudRingOuter = document.getElementById('hud-ring-outer');
+  const hudRingInner = document.getElementById('hud-ring-inner');
+  const hudRadarWedge = document.getElementById('hud-radar-wedge');
+  const hudPitchGroup = document.getElementById('hud-pitch-group');
+  const hudScaleBars = document.getElementById('hud-scale-bars');
+  const hudDrawPaths = Array.from(document.querySelectorAll('.hud-draw-path'));
+  const leaderLines = [1, 2, 3].map((i) => document.getElementById(`leader-line-${i}`));
+  const sectorPins = [1, 2, 3].map((i) => document.getElementById(`sector-pin-${i}`));
+
+  gsap.set([hudRingOuter, hudRingInner, hudRadarWedge, hudPitchGroup], {
+    svgOrigin: '0 0'
+  });
+
+  // ===========================================================================
+  // Build 3D Holographic Tactical Radar & Terrain Ring Platform inside Three.js Scene
+  // ===========================================================================
+  const menuHologramGroup = new THREE.Group();
+  menuHologramGroup.name = 'SkyEyeMenuHologram';
+  menuHologramGroup.position.set(0, 0.25, 0);
+
+  const holoCyanMat = new THREE.LineBasicMaterial({
+    color: 0x00f0ff,
+    transparent: true,
+    opacity: 0.45
+  });
+  const holoEmeraldMat = new THREE.LineBasicMaterial({
+    color: 0x10b981,
+    transparent: true,
+    opacity: 0.35
+  });
+
+  // Concentric 3D radar rings beneath the live 3D quadcopter
+  const ringRadii = [1.8, 3.4, 5.6, 8.5, 12.5];
+  const holoRingMeshes = [];
+  ringRadii.forEach((r, idx) => {
+    const ringGeo = new THREE.RingGeometry(r, r + (idx === 1 ? 0.08 : 0.04), 64);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: idx % 2 === 0 ? 0x00f0ff : 0x10b981,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: idx === 1 ? 0.42 : 0.22
+    });
+    const mesh = new THREE.Mesh(ringGeo, ringMat);
+    mesh.position.y = -idx * 0.08;
+    menuHologramGroup.add(mesh);
+    holoRingMeshes.push(mesh);
+  });
+
+  // 3D Wireframe Topographic Dome / Grid Floor beneath UAV
+  const gridGeo = new THREE.PlaneGeometry(36, 36, 28, 28);
+  gridGeo.rotateX(-Math.PI / 2);
+  const posAttr = gridGeo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const vx = posAttr.getX(i);
+    const vz = posAttr.getZ(i);
+    const dist = Math.hypot(vx, vz);
+    const wave = Math.sin(vx * 0.38) * Math.cos(vz * 0.38) * 0.65 + Math.cos(dist * 0.45) * 0.35;
+    posAttr.setY(i, dist < 3.5 ? -0.35 : wave - 0.6);
+  }
+  gridGeo.computeVertexNormals();
+  const wireGridMesh = new THREE.Mesh(
+    gridGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0x00f0ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.16
+    })
+  );
+  wireGridMesh.position.y = -0.65;
+  menuHologramGroup.add(wireGridMesh);
+
+  // 3D Vertical Beacon Pillars corresponding to the 3 Tactical Sectors
+  const beaconPositions = [
+    { x: -3.2, z: 1.4, color: 0x10b981 },
+    { x: 0.0, z: 2.2, color: 0x00f0ff },
+    { x: 3.2, z: 1.4, color: 0xef4444 }
+  ];
+  beaconPositions.forEach((b) => {
+    const beamGeo = new THREE.CylinderGeometry(0.03, 0.03, 2.6, 8);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: b.color,
+      transparent: true,
+      opacity: 0.42
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.set(b.x, 0.4, b.z);
+    menuHologramGroup.add(beam);
+  });
+
+  scene.add(menuHologramGroup);
+
+  window.setSkyEyeMenuHologramVisible = (visible) => {
+    menuHologramGroup.visible = Boolean(visible);
+  };
+
+  // ===========================================================================
+  // Live 3D Camera & UAV Choreography State
+  // ===========================================================================
+  const introState = {
+    introPlaying: true,
+    menuStage: 'tier1',
+    hoverSector: 0,
+    // 3D Camera Spherical / Orbital coordinates around the live 3D Drone
+    camRadius: 2.1,
+    camYaw: 2.75,
+    camHeight: 0.18,
+    lookAtOffsetY: 0.08,
+    lookAtOffsetX: 0.0,
+    // 3D Quadcopter pose
+    droneX: 0,
+    droneY: 1.85,
+    droneZ: 0,
+    droneYaw: 0.35,
+    dronePitch: -0.18,
+    droneRoll: -0.36,
+    // Interactive hover & mouse offsets
+    mouseNX: 0,
+    mouseNY: 0,
+    targetHoverRoll: 0,
+    targetHoverPitch: -0.08,
+    targetHoverCamX: 0,
+    // HUD SVG rotations & telemetry values
+    outerRingAngle: 0,
+    innerRingAngle: 0,
+    radarWedgeAngle: 0,
+    holoScale: 0.01,
+    telemetryHdg: 0,
+    telemetryAlt: 0,
+    telemetrySpd: 0,
+    telemetryPitch: 0
+  };
+
+  function updateTelemetryReadouts() {
+    if (hdgEl) hdgEl.textContent = `${String(Math.round((introState.telemetryHdg + 360) % 360)).padStart(3, '0')}°`;
+    if (altEl) altEl.textContent = `${introState.telemetryAlt.toFixed(1)}m`;
+    if (spdEl) spdEl.textContent = `${Math.round(introState.telemetrySpd)}km/h`;
+    if (pitchEl) {
+      const p = introState.telemetryPitch;
+      pitchEl.textContent = `${p >= 0 ? '+' : ''}${p.toFixed(1)}°`;
+    }
+  }
+
+  // Highlight SVG Leader Line & Tilt 3D UAV when hovering Tier-1 Mode Nodes
+  window.setSkyEyeHudHoverSector = (sectorIdx, category) => {
+    introState.hoverSector = sectorIdx;
+    leaderLines.forEach((line, idx) => {
+      if (!line) return;
+      line.classList.toggle('active-leader', idx + 1 === sectorIdx);
+    });
+
+    if (sectorIdx === 1) {
+      introState.targetHoverRoll = 0.24;
+      introState.targetHoverPitch = -0.10;
+      introState.targetHoverCamX = -0.35;
+    } else if (sectorIdx === 2) {
+      introState.targetHoverRoll = 0.0;
+      introState.targetHoverPitch = -0.22;
+      introState.targetHoverCamX = 0.0;
+    } else if (sectorIdx === 3) {
+      introState.targetHoverRoll = -0.24;
+      introState.targetHoverPitch = -0.14;
+      introState.targetHoverCamX = 0.35;
+    } else {
+      introState.targetHoverRoll = -0.05;
+      introState.targetHoverPitch = -0.08;
+      introState.targetHoverCamX = 0.0;
+    }
+
+    if (sectorIdx > 0 && category) {
+      window.setSkyEyeHudSectorAccent(category);
+    }
+  };
+
+  window.setSkyEyeHudSectorAccent = (category) => {
+    const colorHex = category === 'training' ? 0x10b981 : (category === 'tactical' ? 0xef4444 : 0x00f0ff);
+    if (holoRingMeshes[1] && holoRingMeshes[1].material) {
+      holoRingMeshes[1].material.color.setHex(colorHex);
+    }
+  };
+
+  // Smoothly shift 3D Camera between Tier-1 (Hero 3-Mode View) and Tier-2 (Advanced Config View)
+  window.setSkyEyeMenuStage = (stageName, category) => {
+    introState.menuStage = stageName;
+    if (introState.introPlaying) return;
+
+    if (stageName === 'tier2') {
+      const catYaw = category === 'training' ? 0.78 : (category === 'tactical' ? -0.58 : 0.18);
+      gsap.to(introState, {
+        camRadius: 2.55,
+        camYaw: catYaw,
+        camHeight: 0.48,
+        lookAtOffsetY: -0.15,
+        duration: 0.85,
+        ease: 'expo.out'
+      });
+    } else {
+      gsap.to(introState, {
+        camRadius: 3.35,
+        camYaw: 0.48,
+        camHeight: 0.68,
+        lookAtOffsetY: 0.0,
+        duration: 0.75,
+        ease: 'expo.out'
+      });
+    }
+  };
+
+  // Text Scramble Utility for Authentic Military Avionics Decoding
+  const SCRAMBLE_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ//:#<>=';
+  function scrambleDecodeText(el, finalStr, duration = 0.55) {
+    if (!el) return;
+    const stateObj = { p: 0 };
+    gsap.to(stateObj, {
+      p: 1,
+      duration,
+      ease: 'none',
+      onUpdate: () => {
+        const revealLen = Math.floor(stateObj.p * finalStr.length);
+        let out = finalStr.slice(0, revealLen);
+        for (let i = revealLen; i < finalStr.length; i++) {
+          out += finalStr[i] === ' ' ? ' ' : SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
+        }
+        el.textContent = out;
+      },
+      onComplete: () => {
+        el.textContent = finalStr;
+      }
+    });
+  }
+
+  // Pointer Parallax on 3D Camera only (keep HUD Reticle locked at exact screen center)
+  if (menuModal) {
+    menuModal.addEventListener('pointermove', (e) => {
+      if (!state.menuOpen) return;
+      introState.mouseNX = (e.clientX / Math.max(1, window.innerWidth)) - 0.5;
+      introState.mouseNY = (e.clientY / Math.max(1, window.innerHeight)) - 0.5;
+    });
+  }
+
+  // Continuous 60fps+ Live 3D UAV + Hologram + Avionics HUD Ticker while Menu is Open
+  gsap.ticker.add((time, deltaTime) => {
+    if (!state.menuOpen) {
+      if (menuHologramGroup.visible) menuHologramGroup.visible = false;
+      return;
+    }
+    const shouldShowHolo = introState.menuStage !== 'tier2';
+    if (menuHologramGroup.visible !== shouldShowHolo) {
+      menuHologramGroup.visible = shouldShowHolo;
+    }
+
+    const dt = Math.min(0.05, (deltaTime || 16.6) / 1000);
+    const t = performance.now() * 0.001;
+
+    // Spin 3D Hologram Rings
+    menuHologramGroup.scale.setScalar(Math.max(0.001, introState.holoScale));
+    holoRingMeshes.forEach((mesh, idx) => {
+      mesh.rotation.y += (idx % 2 === 0 ? 0.22 : -0.18) * dt;
+    });
+    wireGridMesh.rotation.y += 0.04 * dt;
+
+    // Position & Animate Live 3D Quadcopter (playerDroneMesh)
+    if (playerDroneMesh && playerDroneMesh.root) {
+      const bobY = Math.sin(t * 2.4) * 0.07;
+      const bobRoll = Math.cos(t * 1.9) * 0.035;
+      const bobPitch = Math.sin(t * 1.5) * 0.025;
+
+      playerDroneMesh.root.position.set(
+        introState.droneX,
+        introState.droneY + bobY,
+        introState.droneZ
+      );
+      playerDroneMesh.root.rotation.set(0, introState.droneYaw, 0);
+
+      if (playerDroneMesh.tiltGroup) {
+        if (!introState.introPlaying) {
+          introState.droneRoll += (introState.targetHoverRoll - introState.droneRoll) * Math.min(1, dt * 6);
+          introState.dronePitch += (introState.targetHoverPitch - introState.dronePitch) * Math.min(1, dt * 6);
+        }
+        playerDroneMesh.tiltGroup.rotation.set(
+          introState.dronePitch + bobPitch - introState.mouseNY * 0.14,
+          0,
+          introState.droneRoll + bobRoll - introState.mouseNX * 0.18
+        );
+      }
+
+      if (playerDroneMesh.rotors) {
+        playerDroneMesh.rotors.forEach((r, idx) => {
+          r.rotation.y += (idx % 2 === 0 ? 1 : -1) * 42 * dt;
+        });
+      }
+    }
+
+    // Orbit 3D Camera around Live 3D Quadcopter
+    const parallaxYaw = introState.mouseNX * 0.22 + (introState.introPlaying ? 0 : introState.targetHoverCamX * 0.35);
+    const parallaxH = introState.mouseNY * -0.24;
+    const totalYaw = introState.camYaw + parallaxYaw;
+    const cx = introState.droneX + Math.sin(totalYaw) * introState.camRadius;
+    const cz = introState.droneZ + Math.cos(totalYaw) * introState.camRadius;
+    const cy = introState.droneY + introState.camHeight + parallaxH;
+
+    camera.position.set(cx, cy, cz);
+    camera.lookAt(
+      introState.droneX + introState.lookAtOffsetX,
+      introState.droneY + introState.lookAtOffsetY,
+      introState.droneZ
+    );
+
+    // Rotate Avionics HUD Rings & Radar Wedge
+    introState.outerRingAngle = (introState.outerRingAngle + 5.5 * dt) % 360;
+    introState.innerRingAngle = (introState.innerRingAngle - 4.0 * dt) % 360;
+    introState.radarWedgeAngle = (introState.radarWedgeAngle + 68 * dt) % 360;
+
+    if (hudRingOuter) gsap.set(hudRingOuter, { rotation: introState.outerRingAngle });
+    if (hudRingInner) gsap.set(hudRingInner, { rotation: introState.innerRingAngle });
+    if (hudRadarWedge) gsap.set(hudRadarWedge, { rotation: introState.radarWedgeAngle });
+
+    // Rapid 14Hz Avionics Telemetry Ticking on All 4 Corners
+    if (!introState._lastTickTime || (t - introState._lastTickTime) >= 0.07) {
+      introState._lastTickTime = t;
+      const deg = 180 / Math.PI;
+      const livePitch = (introState.dronePitch * deg + (Math.random() - 0.5) * 0.4).toFixed(1);
+      const liveRoll = (introState.droneRoll * deg + (Math.random() - 0.5) * 0.6).toFixed(1);
+      const liveYaw = String(Math.round(((introState.droneYaw * deg + introState.radarWedgeAngle * 0.15) % 360 + 360) % 360)).padStart(3, '0');
+
+      if (imuTickerEl) {
+        const dg = (0.98 + (Math.random() - 0.5) * 0.06).toFixed(2);
+        const lat = (1.1 + Math.random() * 0.5).toFixed(1);
+        imuTickerEl.textContent = `IMU: 1000Hz // ${dg}G // LAT ${lat}ms`;
+      }
+      if (attitudeTickerEl) {
+        const pStr = `${Number(livePitch) >= 0 ? '+' : ''}${livePitch}°`;
+        const rStr = `${Number(liveRoll) >= 0 ? '+' : ''}${liveRoll}°`;
+        attitudeTickerEl.textContent = `PITCH: ${pStr} // ROLL: ${rStr} // YAW: ${liveYaw}°`;
+      }
+      if (radarTickerEl) {
+        const azm = String(Math.round(introState.radarWedgeAngle)).padStart(3, '0');
+        const rng = (1.82 + Math.sin(t * 7.3) * 0.06 + (Math.random() - 0.5) * 0.03).toFixed(2);
+        radarTickerEl.textContent = `AZM: ${azm}° // RNG: ${rng}km // LOCK: 3/3`;
+      }
+      if (powerTickerEl) {
+        const volt = (25.18 + Math.sin(t * 4.1) * 0.04 + (Math.random() - 0.5) * 0.03).toFixed(2);
+        const amp = (14.1 + Math.abs(introState.droneRoll) * 6.5 + (Math.random() - 0.5) * 0.4).toFixed(1);
+        powerTickerEl.textContent = `PWR BUS // 6S LiPo ${volt}V · ${amp}A`;
+      }
+      if (coordsTickerEl) {
+        const secN = (42.0 + Math.sin(t * 2.2) * 0.12).toFixed(1);
+        const secE = (15.0 + Math.cos(t * 2.0) * 0.12).toFixed(1);
+        coordsTickerEl.textContent = `GPS: N 24°58'${secN}" E 121°31'${secE}"`;
+      }
+    }
+  });
+
+  // ===========================================================================
+  // Master 9.0-Second 4-Act GSAP Opening Choreography Timeline
+  // ===========================================================================
+  let introTl = null;
+
+  function buildAndPlayIntroTimeline() {
+    if (introTl) introTl.kill();
+
+    introState.introPlaying = true;
+    introState.menuStage = 'tier1';
+    introState.hoverSector = 0;
+
+    // Reset 3D Choreography initial keyframes (Act 1 Close-Up Optical Gimbal inspection)
+    introState.camRadius = 1.95;
+    introState.camYaw = 2.85;
+    introState.camHeight = 0.12;
+    introState.lookAtOffsetY = 0.06;
+    introState.lookAtOffsetX = 0.0;
+    introState.droneX = 0;
+    introState.droneY = 1.85;
+    introState.droneZ = 0;
+    introState.droneYaw = 0.42;
+    introState.dronePitch = -0.22;
+    introState.droneRoll = -0.38;
+    introState.holoScale = 0.01;
+    introState.telemetryHdg = 0;
+    introState.telemetryAlt = 0;
+    introState.telemetrySpd = 0;
+    introState.telemetryPitch = 0;
+    updateTelemetryReadouts();
+
+    if (menuModal) menuModal.classList.remove('tier2-active');
+    gsap.set('#intro-cinematic-stage', { autoAlpha: 1 });
+    if (tier1Stage) {
+      tier1Stage.classList.remove('tier1-hidden');
+      gsap.set(tier1Stage, { autoAlpha: 1, scale: 1 });
+    }
+    if (commandDeck) {
+      commandDeck.classList.add('tier2-hidden');
+      gsap.set(commandDeck, { autoAlpha: 0, pointerEvents: 'none' });
+    }
+    if (skipBtn) skipBtn.classList.remove('hidden');
+
+    // Prepare SVG vector stroke-dasharray / stroke-dashoffset for HUD reticle & leader lines
+    hudDrawPaths.forEach((path) => {
+      const len = typeof path.getTotalLength === 'function' ? path.getTotalLength() : 600;
+      gsap.set(path, {
+        strokeDasharray: len,
+        strokeDashoffset: len,
+        opacity: 0.85
+      });
+    });
+
+    leaderLines.forEach((line) => {
+      if (!line) return;
+      const len = typeof line.getTotalLength === 'function' ? line.getTotalLength() : 420;
+      gsap.set(line, {
+        strokeDasharray: len,
+        strokeDashoffset: len,
+        opacity: 0.72
+      });
+    });
+
+    // Reset DOM/SVG elements for Act 1
+    gsap.set('#intro-flash-shutter', { opacity: 0.92 });
+    gsap.set('#intro-laser-line', { scaleX: 0, scaleY: 1, opacity: 0 });
+    gsap.set('#intro-letterbox-top', { y: -44, opacity: 0 });
+    gsap.set('#intro-letterbox-bottom', { y: 44, opacity: 0 });
+    gsap.set('#intro-corner-tl', { opacity: 0, x: 46, y: 34 });
+    gsap.set('#intro-corner-tr', { opacity: 0, x: -46, y: 34 });
+    gsap.set('#intro-corner-bl', { opacity: 0, x: 46, y: -34 });
+    gsap.set('#intro-corner-br', { opacity: 0, x: -46, y: -34 });
+    gsap.set('.boot-line', { opacity: 0 });
+    gsap.set([hudRingOuter, hudRingInner], { opacity: 0, scale: 0.78 });
+    gsap.set(hudPitchGroup, { opacity: 0, scale: 0.88, rotation: -18 });
+    gsap.set(hudScaleBars, { opacity: 0, scale: 1.08 });
+    gsap.set(hudRadarWedge, { opacity: 0 });
+    gsap.set(sectorPins, { opacity: 0, scale: 1.9 });
+    gsap.set('#hero-title-cluster', { opacity: 0, y: -18, scale: 1.04 });
+    gsap.set('#hero-main-title', { letterSpacing: '0.68em', filter: 'blur(10px)' });
+    gsap.set('.hero-mode-node', { autoAlpha: 0, y: 38, scale: 0.92, pointerEvents: 'none' });
+    gsap.set('#intro-progress-fill', { width: '0%' });
+
+    if (phaseReadout) phaseReadout.textContent = 'PHASE 01 // OPTICAL SHUTTER & AVIONICS COLD BOOT';
+    if (thrustReadout) thrustReadout.textContent = 'DATALINK // CALIBRATING EO-NADIR';
+
+    introTl = gsap.timeline({
+      defaults: { ease: 'power2.out' },
+      onComplete: () => {
+        introState.introPlaying = false;
+        window._skyEyeIntroCompletedOnce = true;
+        if (skipBtn) skipBtn.classList.add('hidden');
+        gsap.set('.hero-mode-node', { pointerEvents: 'auto' });
+      }
+    });
+
+    // =========================================================================
+    // ACT 1 (0.0s - 1.2s): Optical Flash Shutter, Horizon Laser & Avionics Cold Boot
+    // =========================================================================
+    introTl
+      .to('#intro-flash-shutter', {
+        opacity: 0,
+        duration: 0.55,
+        ease: 'power3.out'
+      }, 0.0)
+      .to('#intro-laser-line', {
+        scaleX: 1,
+        opacity: 1,
+        duration: 0.36,
+        ease: 'expo.out'
+      }, 0.02)
+      .to('#intro-laser-line', {
+        scaleY: 20,
+        opacity: 0,
+        duration: 0.38,
+        ease: 'power3.out'
+      }, 0.38)
+      .to(['#intro-letterbox-top', '#intro-letterbox-bottom'], {
+        y: 0,
+        opacity: 1,
+        duration: 0.45,
+        ease: 'expo.out'
+      }, 0.08)
+      .to(['#intro-corner-tl', '#intro-corner-tr', '#intro-corner-bl', '#intro-corner-br'], {
+        opacity: 1,
+        x: 0,
+        y: 0,
+        duration: 0.5,
+        stagger: 0.05,
+        ease: 'power4.out'
+      }, 0.14)
+      .call(() => {
+        const b1 = document.getElementById('boot-line-1');
+        if (b1) {
+          gsap.set(b1, { opacity: 1 });
+          scrambleDecodeText(b1, '[OK] KALMAN ATTITUDE FILTER CALIBRATED', 0.3);
+        }
+      }, null, 0.28)
+      .call(() => {
+        const b2 = document.getElementById('boot-line-2');
+        if (b2) {
+          gsap.set(b2, { opacity: 1 });
+          scrambleDecodeText(b2, '[OK] EO-NADIR 90° + FLIR THERMAL OPTICS', 0.3);
+        }
+      }, null, 0.48)
+      .call(() => {
+        const b3 = document.getElementById('boot-line-3');
+        if (b3) {
+          gsap.set(b3, { opacity: 1 });
+          scrambleDecodeText(b3, '[OK] FORMOSA URBAN & VALLEY DEM LOADED', 0.3);
+        }
+      }, null, 0.68)
+      .call(() => {
+        const b4 = document.getElementById('boot-line-4');
+        if (b4) {
+          gsap.set(b4, { opacity: 1 });
+          scrambleDecodeText(b4, '[OK] CCIP BALLISTIC COMPUTER ONLINE', 0.3);
+        }
+      }, null, 0.88)
+      .to(introState, {
+        holoScale: 1,
+        duration: 1.05,
+        ease: 'expo.out'
+      }, 0.25)
+      .to(introState, {
+        telemetryHdg: 142,
+        telemetryAlt: 48.5,
+        telemetrySpd: 68,
+        telemetryPitch: -6.4,
+        duration: 1.15,
+        ease: 'power2.out',
+        onUpdate: updateTelemetryReadouts
+      }, 0.2)
+      .to('#intro-progress-fill', {
+        width: '100%',
+        duration: 5.1,
+        ease: 'none'
+      }, 0.15);
+
+    // =========================================================================
+    // ACT 2 (1.1s - 3.0s): Avionics Reticle Vector Construction & 3D UAV Banking Flyby
+    // =========================================================================
+    introTl
+      .call(() => {
+        if (phaseReadout) phaseReadout.textContent = 'PHASE 02 // AVIONICS RETICLE & 3D FLIGHT MANEUVER';
+        if (thrustReadout) thrustReadout.textContent = 'DATALINK // 3D TELEMETRY STREAMING';
+      }, null, 1.1)
+      .to(hudDrawPaths, {
+        strokeDashoffset: 0,
+        duration: 0.95,
+        stagger: 0.05,
+        ease: 'power2.inOut'
+      }, 1.15)
+      .to([hudRingOuter, hudRingInner], {
+        opacity: 1,
+        scale: 1,
+        duration: 0.6,
+        stagger: 0.08,
+        ease: 'expo.out'
+      }, 1.2)
+      .to(hudPitchGroup, {
+        opacity: 1,
+        scale: 1,
+        rotation: 0,
+        duration: 0.65,
+        ease: 'back.out(1.5)'
+      }, 1.38)
+      .to(hudScaleBars, {
+        opacity: 1,
+        scale: 1,
+        duration: 0.55,
+        ease: 'power3.out'
+      }, 1.52)
+      // 3D Camera sweeps in a dynamic orbital arc while 3D UAV banks
+      .to(introState, {
+        camRadius: 4.35,
+        camYaw: 1.15,
+        camHeight: 1.08,
+        droneRoll: 0.34,
+        dronePitch: -0.14,
+        droneYaw: -0.18,
+        telemetryHdg: 285,
+        telemetryAlt: 112.0,
+        telemetrySpd: 104,
+        telemetryPitch: -8.2,
+        duration: 1.85,
+        ease: 'power2.inOut',
+        onUpdate: updateTelemetryReadouts
+      }, 1.12);
+
+    // =========================================================================
+    // ACT 3 (2.9s - 4.3s): Island Sector Radar Lock, Leader Lines & Hero Title Reveal
+    // =========================================================================
+    introTl
+      .call(() => {
+        if (phaseReadout) phaseReadout.textContent = 'PHASE 03 // FORMOSA 3-SECTOR TACTICAL LOCK';
+        if (thrustReadout) thrustReadout.textContent = 'DATALINK // 3 MISSION SECTORS ACQUIRED';
+      }, null, 2.88)
+      .to(hudRadarWedge, {
+        opacity: 0.9,
+        duration: 0.38
+      }, 2.92)
+      .to(sectorPins, {
+        opacity: 1,
+        scale: 1,
+        duration: 0.38,
+        stagger: 0.14,
+        ease: 'back.out(2.0)'
+      }, 3.0)
+      .to(leaderLines, {
+        strokeDashoffset: 0,
+        duration: 0.6,
+        stagger: 0.12,
+        ease: 'power3.out'
+      }, 3.22)
+      .to('#hero-title-cluster', {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        duration: 0.65,
+        ease: 'expo.out'
+      }, 3.38)
+      .to('#hero-main-title', {
+        letterSpacing: '0.24em',
+        filter: 'blur(0px)',
+        duration: 0.72,
+        ease: 'expo.out'
+      }, 3.38)
+      .to(introState, {
+        camRadius: 3.35,
+        camYaw: 0.48,
+        camHeight: 0.68,
+        lookAtOffsetY: 0.0,
+        droneRoll: -0.05,
+        dronePitch: -0.08,
+        droneYaw: 0.12,
+        telemetryHdg: 38,
+        telemetryAlt: 85.0,
+        telemetrySpd: 72,
+        telemetryPitch: -4.5,
+        duration: 1.45,
+        ease: 'power3.out',
+        onUpdate: updateTelemetryReadouts
+      }, 2.95);
+
+    // =========================================================================
+    // ACT 4 (4.25s - 5.35s): 3 Integrated Mode Nodes Materialize in HUD Viewport
+    // =========================================================================
+    introTl
+      .call(() => {
+        if (phaseReadout) phaseReadout.textContent = 'PHASE 04 // TACTICAL HUD READY — SELECT MISSION MODE';
+        if (thrustReadout) thrustReadout.textContent = 'DATALINK // TIER-1 MODE NODES ONLINE';
+        gsap.set('.hero-mode-node', { pointerEvents: 'auto' });
+      }, null, 4.22)
+      .to('.hero-mode-node', {
+        autoAlpha: 1,
+        y: 0,
+        scale: 1,
+        duration: 0.55,
+        stagger: 0.1,
+        ease: 'back.out(1.4)'
+      }, 4.28);
+  }
+
+  function skipSkyEyeIntroToMenu(quickAnimate = false) {
+    if (introTl) {
+      introTl.progress(1, false);
+    }
+    introState.introPlaying = false;
+    introState.menuStage = 'tier1';
+    window._skyEyeIntroCompletedOnce = true;
+
+    if (skipBtn) skipBtn.classList.add('hidden');
+    if (menuModal) menuModal.classList.remove('tier2-active');
+    gsap.set('#intro-cinematic-stage', { autoAlpha: 1 });
+    if (commandDeck) {
+      commandDeck.classList.add('tier2-hidden');
+      gsap.set(commandDeck, { autoAlpha: 0, pointerEvents: 'none' });
+    }
+    if (tier1Stage) {
+      tier1Stage.classList.remove('tier1-hidden');
+      gsap.set(tier1Stage, { autoAlpha: 1, scale: 1 });
+    }
+
+    introState.camRadius = 3.35;
+    introState.camYaw = 0.48;
+    introState.camHeight = 0.68;
+    introState.lookAtOffsetY = 0.0;
+    introState.droneRoll = -0.05;
+    introState.dronePitch = -0.08;
+    introState.droneYaw = 0.12;
+    introState.holoScale = 1;
+
+    gsap.set('.hero-mode-node', { pointerEvents: 'auto' });
+    if (quickAnimate) {
+      gsap.fromTo(
+        '.hero-mode-node',
+        { autoAlpha: 0, y: 20, scale: 0.95 },
+        { autoAlpha: 1, y: 0, scale: 1, duration: 0.38, stagger: 0.07, ease: 'power3.out' }
+      );
+    } else {
+      gsap.set('.hero-mode-node', { autoAlpha: 1, y: 0, scale: 1 });
+    }
+  }
+
+  window.skipSkyEyeIntroToMenu = skipSkyEyeIntroToMenu;
+  window.replaySkyEyeIntro = buildAndPlayIntroTimeline;
+
+  if (skipBtn) {
+    skipBtn.addEventListener('click', () => {
+      skipSkyEyeIntroToMenu(true);
+    });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (!state.menuOpen) return;
+    if (introState.introPlaying && (e.code === 'Space' || e.code === 'Escape' || e.code === 'Enter')) {
+      e.preventDefault();
+      skipSkyEyeIntroToMenu(true);
+    } else if (!introState.introPlaying && introState.menuStage === 'tier2' && e.code === 'Escape') {
+      e.preventDefault();
+      if (typeof window.returnToSkyEyeTier1 === 'function') {
+        window.returnToSkyEyeTier1();
+      }
+    }
+  });
+
+  buildAndPlayIntroTimeline();
 }
 
 try { buildAnimeSky(); } catch (e) { console.warn('buildAnimeSky:', e); }
@@ -11138,12 +13407,12 @@ try { buildCCIPMarker(); } catch (e) { console.warn('buildCCIPMarker:', e); }
 try { buildRainSystem(); } catch (e) { console.warn('buildRainSystem:', e); }
 try { applyWeather('clear'); } catch (e) { console.warn('applyWeather:', e); }
 try { applyTimeOfDay('day'); } catch (e) { console.warn('applyTimeOfDay:', e); }
+updateCameraAndWorldAnimations(0);
 try { bindUIEvents(); } catch (e) { console.warn('bindUIEvents:', e); }
+try { initSkyEyeIntroAndMenu(); } catch (e) { console.warn('initSkyEyeIntroAndMenu:', e); }
 
 window.applyWeather = applyWeather;
 window.cycleWeather = cycleWeather;
-
-updateCameraAndWorldAnimations(0);
 
 let lastFrameTime = performance.now();
 function animate(now) {

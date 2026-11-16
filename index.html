@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>島嶼航線｜無人機飛行實戰模擬</title>
+  <title>天空之眼：無人機戰術模擬｜SKY EYE UAV SIMULATOR</title>
 
   <!-- Local Three.js and GSAP -->
   <script src="vendor/three.min.js"></script>
   <script src="vendor/gsap.min.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=3.22" />
+  <link rel="stylesheet" href="style.css?v=4.20" />
 </head>
 <body>
   <!-- 3D WebGL Viewport -->
@@ -26,37 +26,67 @@
   <div id="damage-flash"></div>
   <div id="gate-flash"></div>
 
+  <!-- Crash Detected / Emergency Respawn Overlay -->
+  <div id="crash-overlay" class="hidden" role="alert" aria-live="assertive">
+    <div class="crash-card">
+      <div class="crash-glitch-badge">⚠️ CRASH DETECTED / 機體墜毀</div>
+      <div class="crash-cause" id="crash-cause-text">高速撞擊障礙物・機體結構受損</div>
+      <div class="crash-vloss">[ VTX SIGNAL LOST / 訊號中斷 ]</div>
+      <div class="crash-prompt">
+        請按 <kbd>R</kbd> 鍵於最後檢查點重生
+      </div>
+      <div class="crash-penalty" id="crash-penalty-text">+5.0s 懲罰時間加計</div>
+      <button id="btn-crash-respawn" class="btn-crash-respawn" type="button">立即重生 (R)</button>
+    </div>
+  </div>
+
   <!-- Center Dynamic Artificial Horizon & Pitch Ladder -->
   <div class="hud-center-reticle" id="reticle-container">
     <svg id="horizon-svg" viewBox="-180 -140 360 280">
-      <circle cx="0" cy="0" r="96" fill="none" stroke="rgba(0, 240, 255, 0.28)" stroke-width="1.2" stroke-dasharray="4 6" />
-      <path d="M -42 0 L -14 0 L -14 6 M 42 0 L 14 0 L 14 6" fill="none" stroke="#00f0ff" stroke-width="2.2" stroke-linecap="round" />
-      <circle cx="0" cy="0" r="2.5" fill="#00f0ff" />
+      <!-- Aircraft Waterline Boresight Reference Symbol (Precision Miniature Aircraft) -->
+      <path d="M -36 0 L -12 0 L -12 4 M 36 0 L 12 0 L 12 4" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="0" cy="0" r="2" fill="#ffffff" />
 
+      <!-- Dynamic Pitch & Roll Horizon Group -->
       <g id="horizon-dynamic-group">
-        <line x1="-85" y1="0" x2="-22" y2="0" stroke="rgba(16, 185, 129, 0.85)" stroke-width="2" />
-        <line x1="22" y1="0" x2="85" y2="0" stroke="rgba(16, 185, 129, 0.85)" stroke-width="2" />
-        <g stroke="rgba(0, 240, 255, 0.65)" stroke-width="1.5" fill="none">
-          <path d="M -28 -35 L -12 -35 M 12 -35 L 28 -35" />
-          <path d="M -20 -70 L -10 -70 M 10 -70 L 20 -70" />
-          <path d="M -28 35 L -12 35 M 12 35 L 28 35" stroke-dasharray="3 3" />
-          <path d="M -20 70 L -10 70 M 10 70 L 20 70" stroke-dasharray="3 3" />
-        </g>
+        <!-- 0° Horizon Line (Solid Horizontal Reference) -->
+        <line x1="-92" y1="0" x2="-40" y2="0" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+        <line x1="40" y1="0" x2="92" y2="0" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+
+        <!-- Pitch Ladder: +5° Climb -->
+        <path d="M -30 -35 L -14 -35 L -14 -31 M 30 -35 L 14 -35 L 14 -31" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        <text x="-34" y="-32" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="end">5</text>
+        <text x="34" y="-32" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="start">5</text>
+
+        <!-- Pitch Ladder: +10° Climb -->
+        <path d="M -38 -70 L -14 -70 L -14 -66 M 38 -70 L 14 -70 L 14 -66" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        <text x="-42" y="-67" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="end">10</text>
+        <text x="42" y="-67" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="start">10</text>
+
+        <!-- Pitch Ladder: -5° Dive (Dashed Rungs) -->
+        <path d="M -30 35 L -14 35 L -14 31 M 30 35 L 14 35 L 14 31" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 3" />
+        <text x="-34" y="38" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="end">-5</text>
+        <text x="34" y="38" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="start">-5</text>
+
+        <!-- Pitch Ladder: -10° Dive (Dashed Rungs) -->
+        <path d="M -38 70 L -14 70 L -14 66 M 38 70 L 14 70 L 14 66" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 3" />
+        <text x="-42" y="73" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="end">-10</text>
+        <text x="42" y="73" fill="#ffffff" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="700" text-anchor="start">-10</text>
       </g>
     </svg>
 
     <!-- Military Downward Optic Reticle (Active in Downward Camera View) -->
     <svg id="nadir-optics-svg" viewBox="-240 -180 480 360" class="hidden">
-      <!-- Outer Corner Brackets -->
-      <g class="reticle-corner-brackets" stroke="rgba(0, 240, 255, 0.7)" stroke-width="2" fill="none">
+      <!-- Outer Corner Brackets (High-Contrast White) -->
+      <g class="reticle-corner-brackets" stroke="rgba(255, 255, 255, 0.85)" stroke-width="2" fill="none">
         <path d="M -210 -140 L -230 -140 L -230 -120" />
         <path d="M 210 -140 L 230 -140 L 230 -120" />
         <path d="M -210 140 L -230 140 L -230 120" />
         <path d="M 210 140 L 230 140 L 230 120" />
       </g>
 
-      <!-- Center MIL-Grid Crosshairs -->
-      <g stroke="rgba(0, 240, 255, 0.75)" stroke-width="1.2">
+      <!-- Center MIL-Grid Crosshairs (High-Contrast White) -->
+      <g stroke="#ffffff" stroke-width="1.4">
         <!-- Horizontal stadia lines -->
         <line x1="-150" y1="0" x2="-16" y2="0" />
         <line x1="16" y1="0" x2="150" y2="0" />
@@ -65,26 +95,26 @@
         <line x1="0" y1="16" x2="0" y2="120" />
         
         <!-- Center aiming circle -->
-        <circle cx="0" cy="0" r="14" fill="none" stroke="rgba(0, 240, 255, 0.85)" stroke-width="1.5" />
-        <circle cx="0" cy="0" r="2" fill="#00f0ff" stroke="none" />
+        <circle cx="0" cy="0" r="14" fill="none" stroke="rgba(255, 255, 255, 0.9)" stroke-width="1.6" />
+        <circle cx="0" cy="0" r="2" fill="#ffffff" stroke="none" />
 
         <!-- Mil tick marks along Horizontal line -->
-        <line x1="-120" y1="-6" x2="-120" y2="6" stroke-width="1.4" />
+        <line x1="-120" y1="-6" x2="-120" y2="6" stroke-width="1.5" />
         <line x1="-90" y1="-4" x2="-90" y2="4" />
-        <line x1="-60" y1="-6" x2="-60" y2="6" stroke-width="1.4" />
+        <line x1="-60" y1="-6" x2="-60" y2="6" stroke-width="1.5" />
         <line x1="-30" y1="-4" x2="-30" y2="4" />
         <line x1="30" y1="-4" x2="30" y2="4" />
-        <line x1="60" y1="-6" x2="60" y2="6" stroke-width="1.4" />
+        <line x1="60" y1="-6" x2="60" y2="6" stroke-width="1.5" />
         <line x1="90" y1="-4" x2="90" y2="4" />
-        <line x1="120" y1="-6" x2="120" y2="6" stroke-width="1.4" />
+        <line x1="120" y1="-6" x2="120" y2="6" stroke-width="1.5" />
 
         <!-- Mil tick marks along Vertical line -->
-        <line x1="-6" y1="-90" x2="6" y2="-90" stroke-width="1.4" />
+        <line x1="-6" y1="-90" x2="6" y2="-90" stroke-width="1.5" />
         <line x1="-4" y1="-60" x2="4" y2="-60" />
-        <line x1="-6" y1="-30" x2="6" y2="-30" stroke-width="1.4" />
-        <line x1="-6" y1="30" x2="6" y2="30" stroke-width="1.4" />
+        <line x1="-6" y1="-30" x2="6" y2="-30" stroke-width="1.5" />
+        <line x1="-6" y1="30" x2="6" y2="30" stroke-width="1.5" />
         <line x1="-4" y1="60" x2="4" y2="60" />
-        <line x1="-6" y1="90" x2="6" y2="90" stroke-width="1.4" />
+        <line x1="-6" y1="90" x2="6" y2="90" stroke-width="1.5" />
       </g>
 
       <!-- Dynamic Wind Deflection Vector (Subtle Deflection Pip, Zero Text Clutter on Reticle) -->
@@ -161,133 +191,174 @@
 
   <!-- Main Avionics HUD Layer -->
   <div id="hud-layer">
-    <!-- Top HUD Row -->
-    <div class="hud-top">
-      <!-- Top Left: Session & Race Timer -->
-      <div class="hud-card session-info">
-        <div class="session-header">
-          <span class="mode-badge" id="hud-mode-badge">飛行操控訓練</span>
-          <span class="player-badge"><span class="rec-dot"></span><span id="hud-player-label">PLAYER 1</span></span>
+    <!-- Top HUD Row: Letterbox Bar (Full-Width Ground Control Station Ribbon) -->
+    <div class="hud-top gcs-bar-top">
+      <!-- Top Left: Satellites, Battery & Mission Timer -->
+      <div class="osd-top-left osd-mono">
+        <div class="osd-slot osd-slot-gps" title="衛星定位鎖定數量">
+          <span class="osd-dot-green"></span>
+          <span>SAT 24</span>
         </div>
-        <div class="timer-row">
-          <span class="timer-label">FLIGHT TIME</span>
-          <span class="timer-value" id="hud-timer">00:00.00</span>
+        <div class="osd-slot osd-slot-pwr" id="hud-battery-slot" title="動力電壓與剩餘電量 (6S LiPo)">
+          <span id="hud-batt-volt">25.2V</span>
+          <span id="hud-batt-pct">100%</span>
         </div>
-        <div class="sub-stats-row">
-          <span><span id="hud-progress-label">任務進度</span>: <strong id="hud-gate-progress">1 / 6</strong></span>
-          <span id="hud-penalty-wrap"><span id="hud-penalty-label">碰撞</span>: <strong id="hud-penalty" style="color: var(--amber);">0 次</strong></span>
-          <span id="hud-ghost-delta-wrap" style="display: none;">差距: <strong id="hud-ghost-delta">0.00s</strong></span>
+        <div class="osd-slot osd-slot-time" title="任務計時">
+          <span class="rec-dot"></span>
+          <span id="hud-player-label" style="display: none;">P1</span>
+          <span id="hud-timer" class="osd-timer-num">00:00.00</span>
         </div>
+        <span id="hud-progress-wrap" class="osd-slot osd-slot-task" style="display: none;"><strong id="hud-gate-progress">1 / 6</strong></span>
+        <span id="hud-penalty-wrap" class="osd-slot osd-slot-pen" style="display: none;"><strong id="hud-penalty">0</strong></span>
+        <span id="hud-ghost-delta-wrap" class="osd-slot" style="display: none;"><strong id="hud-ghost-delta">0.00s</strong></span>
       </div>
 
-      <!-- Top Center: 360 Compass Tape & Target Objective -->
+      <!-- Top Center: Transparent Compass Tape -->
       <div class="hud-center-top">
         <div class="compass-container">
           <div class="compass-center-mark"></div>
-          <canvas id="compass-canvas" width="380" height="38"></canvas>
+          <canvas id="compass-canvas" width="340" height="28"></canvas>
           <div class="compass-heading-readout" id="hud-heading-text">000° N</div>
         </div>
-        <div class="objective-banner" id="hud-objective-banner">
-          <span>航線導引：</span>
-          <span class="gate-pill" id="hud-next-target">穿過 1 號空中檢查門</span>
-        </div>
-
-        <!-- Interactive Training Mode Guide Card -->
-        <div id="training-guide-card" class="training-card">
-          <div class="training-card-header">
-            <span class="training-badge" id="training-step-badge">TASK 01 / 06</span>
-            <span class="training-title" id="training-task-title">垂直起降與定高懸停</span>
-          </div>
-          <div class="training-instruction" id="training-instruction">
-            按住 <kbd>W</kbd> 垂直爬升至 10 公尺，放開或按 <kbd>Space</kbd> 保持平穩懸停 2 秒
-          </div>
-          <div class="training-progress-row">
-            <div class="training-bar-wrap">
-              <div class="training-bar-fill" id="training-bar-fill" style="width: 0%;"></div>
-            </div>
-            <span class="training-status-text" id="training-status-text">懸停進度: 0%</span>
-          </div>
-        </div>
-
-        <!-- Military Tactical Strike Mode Command Banner -->
-        <div id="tactical-hud-card" class="tactical-card hidden">
-          <div class="tactical-header">
-            <span class="tac-ord-badge" id="tactical-bomb-count">剩餘持彈 2 / 2</span>
-            <span class="tac-ccip-badge" id="tactical-ccip-info">CCIP 解算: 自動預測</span>
-          </div>
-          <div class="tactical-targets-row" id="tactical-targets-row">
-            <span class="tac-chip" id="tac-chip-tank">TANK 坦克 0/2</span>
-            <span class="tac-chip" id="tac-chip-radar">RADAR 雷達 0/1</span>
-            <span class="tac-chip" id="tac-chip-depot">DEPOT 彈藥庫 0/1</span>
-          </div>
-        </div>
       </div>
 
+      <!-- Top Right: Real-time Wind, Attitude & Flight Mode -->
+      <div class="osd-top-right osd-mono">
+        <div class="osd-slot osd-slot-wind" id="windTopBadge" title="環境風向風速">
+          <span id="hud-wind-text">CALM 0.0 m/s</span>
+          <span id="hud-wind-level" style="display: none;">0級 靜風</span>
+        </div>
+        <div class="osd-slot osd-slot-att" title="俯仰角 (Pitch) 與翻滾角 (Roll)">
+          <span id="hud-attitude">P:+00° R:+00°</span>
+        </div>
+        <div class="osd-slot osd-slot-mode" title="飛控定高懸停模式與動力狀態">
+          <span class="mode-badge" id="hud-mode-badge">POS-HOLD</span>
+          <span id="hud-boost-status" class="osd-boost-badge">HOVER</span>
+        </div>
+      </div>
     </div>
 
-    <!-- Bottom HUD Row -->
-    <div class="hud-bottom">
-      <!-- Bottom Left: Avionics Telemetry -->
-      <div class="hud-card" id="hud-telemetry-card">
-        <div class="telemetry-grid">
-          <div class="metric-box">
-            <div class="metric-label">
-              <span>水平地速 GS</span>
-              <span id="hud-mps">0.0 m/s</span>
-            </div>
-            <div class="metric-value">
-              <span id="hud-speed">0</span><span class="metric-unit">km/h</span>
-            </div>
-            <div class="meter-bar">
-              <div class="meter-fill" id="bar-speed"></div>
-            </div>
-          </div>
+    <!-- Floating Mission & Tactical Banners (Anchored right below Top Letterbox Bar) -->
+    <div class="gcs-floating-banners">
+      <div class="objective-banner" id="hud-objective-banner">
+        <span>航線導引：</span>
+        <span class="gate-pill" id="hud-next-target">穿過 1 號空中檢查門</span>
+      </div>
 
-          <div class="metric-box">
-            <div class="metric-label">
-              <span>離地高度 AGL</span>
-              <span>上限 120m</span>
-            </div>
-            <div class="metric-value">
-              <span id="hud-altitude">0.0</span><span class="metric-unit">m</span>
-            </div>
-            <div class="meter-bar">
-              <div class="meter-fill" id="bar-altitude" style="background: var(--emerald);"></div>
-            </div>
+      <!-- Interactive Training Mode Guide Card -->
+      <div id="training-guide-card" class="training-card">
+        <div class="training-card-header">
+          <span class="training-badge" id="training-step-badge">TASK 01 / 06</span>
+          <span class="training-title" id="training-task-title">垂直起降與定高懸停</span>
+        </div>
+        <div class="training-instruction" id="training-instruction">
+          按住 <kbd>W</kbd> 垂直爬升至 10 公尺，放開或按 <kbd>Space</kbd> 保持平穩懸停 2 秒
+        </div>
+        <div class="training-progress-row">
+          <div class="training-bar-wrap">
+            <div class="training-bar-fill" id="training-bar-fill" style="width: 0%;"></div>
           </div>
+          <span class="training-status-text" id="training-status-text">懸停進度: 0%</span>
+        </div>
+      </div>
 
-          <div class="metric-box">
-            <div class="metric-label">
-              <span>垂直升降 VSI</span>
-              <span id="hud-throttle-state">自動定高</span>
-            </div>
-            <div class="metric-value">
-              <span id="hud-vspeed">0.0</span><span class="metric-unit">m/s</span>
-            </div>
-          </div>
+      <!-- Military Tactical Strike Mode Command Banner (Unified Clean Banner) -->
+      <div id="tactical-hud-card" class="tactical-banner hidden">
+        <div class="tac-row-main">
+          <span class="tac-ord-text" id="tactical-bomb-count">剩餘持彈 2 / 2</span>
+          <span class="tac-sep">|</span>
+          <span class="tac-ccip-text" id="tactical-ccip-info">CCIP: 自動預測</span>
+        </div>
+        <div class="tac-row-targets" id="tactical-targets-row">
+          <span class="tac-target-item" id="tac-chip-tank">TANK 坦克 0/2</span>
+          <span class="tac-target-item" id="tac-chip-radar">RADAR 雷達 0/1</span>
+          <span class="tac-target-item" id="tac-chip-depot">DEPOT 彈藥庫 0/1</span>
+        </div>
+      </div>
+    </div>
 
-          <div class="metric-box">
-            <div class="metric-label">
-              <span>推力與姿態 ATT</span>
-              <span id="hud-boost-status" style="color: var(--cyan);">CRUISE</span>
-            </div>
-            <div class="metric-value" style="font-size: 16px; margin-top: 6px;">
-              <span id="hud-attitude">P: 0° / R: 0°</span>
-            </div>
+    <!-- Screen Edges: Pure Floating Left Speed Gauge & Right Altitude/VSI Gauge -->
+    <!-- Left Screen Edge: Ground Speed (PFD Left) -->
+    <div class="osd-side-block osd-side-left osd-mono" id="hud-telemetry-card">
+      <div class="osd-metric-head">
+        <span class="osd-metric-title">SPD</span>
+        <span class="osd-metric-subtag">GS</span>
+      </div>
+      <div class="osd-metric-primary">
+        <span id="hud-speed" class="osd-num-hero">0</span>
+        <span class="osd-num-unit">km/h</span>
+      </div>
+      <div class="osd-metric-secondary">
+        <span id="hud-mps">0.0</span>
+        <span class="osd-sub-unit">m/s</span>
+      </div>
+      <div class="meter-bar">
+        <div class="meter-fill" id="bar-speed"></div>
+      </div>
+    </div>
+
+    <!-- Right Screen Edge: Altitude & VSI (PFD Right) -->
+    <div class="osd-side-block osd-side-right osd-mono" id="hud-altitude-card">
+      <div class="osd-metric-head">
+        <span class="osd-ceiling-tag">1500m</span>
+        <span class="osd-metric-title">ALT</span>
+        <span class="osd-metric-subtag">AGL</span>
+      </div>
+      <div class="osd-metric-primary">
+        <span id="hud-altitude" class="osd-num-hero">0.0</span>
+        <span class="osd-num-unit">m</span>
+      </div>
+      <div class="osd-metric-secondary">
+        <span class="osd-vsi-badge">
+          <span id="hud-vsi-arrow">―</span>
+          <span>VSI</span>
+          <span id="hud-vspeed">0.0</span>
+          <span class="osd-sub-unit">m/s</span>
+        </span>
+      </div>
+      <div class="osd-metric-tertiary">
+        <span id="hud-throttle-state" class="osd-state-pill">定高懸停</span>
+      </div>
+      <div class="meter-bar">
+        <div class="meter-fill" id="bar-altitude"></div>
+      </div>
+    </div>
+
+    <!-- Bottom Right: Borderless Minimalist Tactical Map (Docked right above bottom letterbox) -->
+    <div class="osd-minimap" id="minimap-trigger" title="點擊展開全螢幕航圖 (M)">
+      <canvas id="minimap-canvas" width="180" height="180"></canvas>
+      <span id="minimap-title-text" style="display: none;"></span>
+    </div>
+
+    <!-- Bottom HUD Row: Letterbox Bar (Full-Width Ground Control Station Ribbon) -->
+    <div class="hud-bottom gcs-bar-bottom">
+      <!-- Bottom Left: Tactical Payload Status -->
+      <div class="hud-bottom-left osd-mono">
+        <div class="osd-bottom-payload" id="hud-payload-display">
+          <span class="osd-payload-label">ORDNANCE</span>
+          <div class="osd-payload-val">
+            <span id="hud-payload-name">82mm ×2</span>
+            <span id="hud-payload-status" class="osd-armed-tag">[ARMED]</span>
           </div>
         </div>
       </div>
 
-      <!-- Bottom Right: Live Coastal Tactical Radar Minimap -->
-      <div class="hud-card minimap-card">
-        <div class="minimap-header">
-          <span id="minimap-title-text">城市航圖 (北方朝上)</span>
-          <strong id="hud-coords">X: 0m Z: 0m</strong>
-        </div>
-        <div class="minimap-canvas-wrap" id="minimap-trigger" title="點擊展開全螢幕城市航圖 (M)">
-          <canvas id="minimap-canvas" width="230" height="230"></canvas>
-          <div class="minimap-expand-hint">按 M 展開全圖</div>
-        </div>
+      <!-- Bottom Center: GCS Flight Controls Hints -->
+      <div class="gcs-bottom-hints osd-mono" id="gcs-bottom-hints">
+        <span><kbd>W</kbd>/<kbd>S</kbd> 升降</span>
+        <span><kbd>A</kbd>/<kbd>D</kbd> 轉向</span>
+        <span><kbd>↑</kbd>/<kbd>↓</kbd> 前後</span>
+        <span><kbd>←</kbd>/<kbd>→</kbd> 平移</span>
+        <span><kbd>Space</kbd> 懸停</span>
+        <span id="gcs-hint-bomb"><kbd>B</kbd> 投彈</span>
+        <span><kbd>C</kbd> 視角</span>
+        <span><kbd>M</kbd> 航圖</span>
+      </div>
+
+      <!-- Bottom Right: Real-time Coordinates -->
+      <div class="gcs-bottom-coords osd-mono">
+        <span class="gcs-coords-label">POS</span>
+        <span id="hud-coords">X: 0m Z: 0m</span>
       </div>
     </div>
   </div>
@@ -430,6 +501,7 @@
           <div class="shortcut-hints">
             <div><strong>T</strong> 天色 | <strong>Y</strong> 氣候</div>
             <div><strong>C</strong> 切換視角 | <strong>Space</strong> 懸停</div>
+            <div><strong>X</strong> 感光模式 | <strong>Z</strong> 變焦</div>
             <div><strong id="boost-hint-key">Shift</strong> 衝刺 | <strong>R</strong> 重置</div>
             <div><strong>B</strong> 投擲（野外戰場）</div>
             <div><strong>M</strong> 航圖 | <strong>Esc</strong> 暫停／繼續</div>
@@ -448,48 +520,370 @@
   <div class="modal-backdrop hidden" id="world-loading" aria-live="polite" role="status">
     <div class="modal-panel">
       <h2 class="modal-title" id="world-loading-title" style="display: none;"></h2>
-      <progress aria-label="場景載入中"></progress>
+      <progress id="world-loading-progress" max="100" value="0" aria-label="場景載入中"></progress>
       <p class="modal-subtitle" id="world-loading-detail"></p>
     </div>
   </div>
 
 <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="menu-icon-training" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="12" rx="4"/><circle cx="8" cy="14" r="2"/><circle cx="16" cy="14" r="2"/><path d="M8 8V4m8 4V4m-5 13h2"/></symbol><symbol id="menu-icon-race" viewBox="0 0 24 24"><circle cx="12" cy="14" r="8"/><path d="M9 2h6m-3 0v4m5.5 2.5 2-2M12 10v4l3 2"/></symbol><symbol id="menu-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/></symbol><symbol id="menu-icon-sunset" viewBox="0 0 24 24"><path d="M2 18h20M5 22h14M7 15a5 5 0 0 1 10 0M12 3v3M4 8l2 2m14-2-2 2"/></symbol><symbol id="menu-icon-moon" viewBox="0 0 24 24"><path d="M21 14A9 9 0 0 1 10 3a9 9 0 1 0 11 11Z"/></symbol><symbol id="menu-icon-camera" viewBox="0 0 24 24"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 10 6-4v12l-6-4"/></symbol><symbol id="menu-icon-cloud" viewBox="0 0 24 24"><path d="M6 17a4 4 0 0 1 0-8 6 6 0 0 1 11-1 4.5 4.5 0 0 1 1 9Z"/></symbol><symbol id="menu-icon-rain" viewBox="0 0 24 24"><path d="M6 14a3 3 0 0 1 0-6 6 6 0 0 1 11-1 3.5 3.5 0 1 1 1 7H6Zm2 3-2 4m7-4-2 4m7-4-2 4"/></symbol><symbol id="menu-icon-fog" viewBox="0 0 24 24"><path d="M4 8h16M2 12h20M5 16h14M8 20h8"/></symbol><symbol id="menu-icon-wind" viewBox="0 0 24 24"><path d="M3 8h12a2 2 0 1 0-2-2M2 12h17a2 2 0 1 1-2 2M4 16h9a2 2 0 1 1-2 2"/></symbol><symbol id="menu-icon-battery" viewBox="0 0 24 24"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10v4M6 10v4m4-4v4m4-4v4"/></symbol><symbol id="menu-icon-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol><symbol id="menu-icon-start" viewBox="0 0 24 24"><path d="m8 4 13 8-13 8V4Z"/></symbol><symbol id="menu-icon-mission" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="16" rx="2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 11h6m-6 4h6"/></symbol><symbol id="menu-icon-chase" viewBox="0 0 24 24"><path d="m12 3 5 9-5-2-5 2 5-9ZM5 17h14m-11 4h8"/></symbol><symbol id="menu-icon-fpv" viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></symbol><symbol id="menu-icon-down" viewBox="0 0 24 24"><path d="M12 3v11m-5-5 5 5 5-5M3 18l9 3 9-3"/> </symbol></svg>
-  <!-- Main Menu / Mode Selection Modal -->
-  <div class="modal-backdrop" id="menu-modal">
-    <div class="modal-panel">
-      <div class="modal-header">
-        <h1 class="modal-title">島嶼航線</h1>
-        <p class="modal-subtitle">無人機飛行實戰模擬</p>
-      </div>
+  <!-- Main Menu / Mode Selection Modal with 8-10s GSAP Intro & Integrated Two-Tier HUD -->
+  <div class="modal-backdrop intro-active tier1-active" id="menu-modal">
+    <!-- LAYER 1: Full-Viewport Avionics HUD & 8-10s GSAP Choreography Stage -->
+    <div id="intro-cinematic-stage" aria-hidden="true">
+      <!-- Optical Flash & Horizon Calibration Beam -->
+      <div class="intro-flash-shutter" id="intro-flash-shutter"></div>
+      <div class="intro-laser-line" id="intro-laser-line"></div>
 
-      <!-- 3 Game Mode Cards -->
-      <div class="mode-cards-grid">
-        <div class="mode-select-card selected" data-mode="training" data-description="循序漸進的操作教學！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。" aria-describedby="menu-summary-mode">
-          <span class="mode-card-tag">MODE 01 // 新手必學</span>
-          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-training"></use></svg> 新手飛行訓練</div>
+      <!-- Top & Bottom Widescreen GCS Letterbox Ribbons -->
+      <div class="intro-letterbox top" id="intro-letterbox-top">
+        <div class="lb-left">
+          <span class="lb-dot"></span>
+          <span id="intro-sys-code">SKY-EYE // AERO-X TACTICAL GCS v4.20</span>
+          <span class="lb-sep">|</span>
+          <span id="intro-phase-readout">PHASE 01 // OPTICAL CORE COLD BOOT</span>
         </div>
-
-        <div class="mode-select-card" data-mode="versus_race" data-description="Player 1 與 Player 2 輪流挑戰城市賽道！P2 飛行時將同場出現 P1 的「全息影子無人機」同屏較勁。" aria-describedby="menu-summary-mode">
-          <span class="mode-card-tag">MODE 02 // 雙人對決</span>
-          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-race"></use></svg> 雙人競速</div>
-        </div>
-
-        <div class="mode-select-card" data-mode="tactical_strike" data-description="選擇演練項目，挑戰不同的野外飛行任務。" aria-describedby="menu-summary-mode" aria-controls="exercise-selector" aria-expanded="false">
-          <span class="mode-card-tag" style="background: rgba(239, 68, 68, 0.22); border-color: #ef4444; color: #f87171;">MODE 03 // 實戰演練</span>
-          <div class="mode-card-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-mission"></use></svg> 實戰演練</div>
-        </div>
-      </div>
-      <div class="mode-description-row">
-        <div class="mode-description" id="menu-summary-mode" aria-live="polite">循序漸進的操作教學！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。</div>
-        <div class="exercise-selector hidden" id="exercise-selector" aria-label="實戰演練項目">
-          <div class="exercise-selector-heading">選擇演練項目</div>
-          <button type="button" class="exercise-option selected" data-exercise="tactical_strike" aria-pressed="true">
-            <span class="exercise-option-name">01　戰場投彈</span>
-          </button>
+        <div class="lb-right">
+          <span id="intro-telemetry-sat">SAT-LINK: 24 LOCKED</span>
+          <span class="lb-sep">|</span>
+          <span id="intro-telemetry-vtx">VTX: 5.8GHz -38dBm</span>
         </div>
       </div>
 
-      <!-- Flight Settings -->
+      <div class="intro-letterbox bottom" id="intro-letterbox-bottom">
+        <div class="lb-left">
+          <span>AIRSPACE: FORMOSA TACTICAL GRID</span>
+          <span class="lb-sep">|</span>
+          <span id="intro-coords-ticker">GPS: N 24°58'42.0" E 121°31'15.0"</span>
+        </div>
+        <div class="lb-center">
+          <div class="intro-progress-track" id="intro-progress-track">
+            <div class="intro-progress-fill" id="intro-progress-fill"></div>
+          </div>
+        </div>
+        <div class="lb-right">
+          <span id="intro-Prompt-hint">CLICK A TACTICAL SECTOR TO CONFIGURE &amp; LAUNCH</span>
+        </div>
+      </div>
+
+      <!-- HUD Tactical Corner Brackets & Scramble Telemetry -->
+      <div class="intro-hud-corners" id="intro-hud-corners">
+        <div class="intro-corner tl" id="intro-corner-tl">
+          <div class="corner-bracket"></div>
+          <div class="intro-telemetry-block">
+            <div class="intro-sys-tag">AVIONICS // 6-AXIS IMU</div>
+            <div class="intro-boot-lines" id="intro-boot-log">
+              <div class="boot-line" id="boot-line-1" data-text="[OK] KALMAN ATTITUDE FILTER CALIBRATED">[OK] KALMAN ATTITUDE FILTER CALIBRATED</div>
+              <div class="boot-line" id="boot-line-2" data-text="[OK] EO-NADIR 90° + FLIR THERMAL OPTICS">[OK] EO-NADIR 90° + FLIR THERMAL OPTICS</div>
+              <div class="boot-line" id="boot-line-3" data-text="[OK] FORMOSA URBAN &amp; VALLEY DEM LOADED">[OK] FORMOSA URBAN &amp; VALLEY DEM LOADED</div>
+              <div class="boot-line" id="boot-line-4" data-text="[OK] CCIP BALLISTIC COMPUTER ONLINE">[OK] CCIP BALLISTIC COMPUTER ONLINE</div>
+            </div>
+            <div class="intro-sub-readout live-tick" id="intro-imu-ticker">IMU: 1000Hz // ΔG +0.01 // LAT 1.2ms</div>
+          </div>
+        </div>
+
+        <div class="intro-corner tr" id="intro-corner-tr">
+          <div class="corner-bracket"></div>
+          <div class="intro-telemetry-block align-right">
+            <div class="intro-sys-tag">OPTICAL BORESIGHT // LOCKED</div>
+            <div class="intro-sub-readout live-tick" id="intro-attitude-ticker">PITCH: -02.4° // ROLL: +00.0° // YAW: 000°</div>
+          </div>
+        </div>
+
+        <div class="intro-corner bl" id="intro-corner-bl">
+          <div class="corner-bracket"></div>
+          <div class="intro-telemetry-block">
+            <div class="intro-sys-tag">TERRAIN RADAR // 3 SECTORS</div>
+            <div class="intro-sub-readout live-tick" id="intro-radar-ticker">AZM: 000° // RNG: 1.84km // LOCK: 3/3</div>
+          </div>
+        </div>
+
+        <div class="intro-corner br" id="intro-corner-br">
+          <div class="corner-bracket"></div>
+          <div class="intro-telemetry-block align-right">
+            <div class="intro-sys-tag" id="intro-power-ticker">PWR BUS // 6S LiPo 25.20V · 14.2A</div>
+            <div class="intro-sub-readout live-tick" id="intro-thrust-state">FLIGHT CONTROL // ARMED &amp; READY</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Full-Screen Precision Vector Avionics HUD & Sector Leader Lines SVG -->
+      <svg id="hero-avionics-svg" class="hero-avionics-svg" viewBox="-600 -340 1200 680" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <radialGradient id="hudCenterGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.18" />
+            <stop offset="60%" stop-color="#00f0ff" stop-opacity="0.04" />
+            <stop offset="100%" stop-color="#00f0ff" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="radarBeamGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.38" />
+            <stop offset="50%" stop-color="#10b981" stop-opacity="0.12" />
+            <stop offset="100%" stop-color="#00f0ff" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+
+        <!-- Subtle Holographic Island Topographic Contours in HUD Space -->
+        <g id="hud-topo-group" fill="none" stroke="rgba(0, 240, 255, 0.16)" stroke-width="1.2">
+          <path class="hud-draw-path" d="M -520 190 Q -260 60 0 110 T 520 50" />
+          <path class="hud-draw-path" d="M -460 130 Q -180 -10 80 45 T 490 -20" stroke="rgba(16, 185, 129, 0.16)" />
+          <path class="hud-draw-path" d="M -380 240 Q -90 120 190 165 T 540 120" stroke-dasharray="8 6" />
+        </g>
+
+        <!-- Central Optical Eye Reticle, Attitude Rings & In-Radar Sector Targets -->
+        <g id="hud-reticle-core" transform="translate(0, -14) scale(1.16)">
+          <circle cx="0" cy="0" r="210" fill="url(#hudCenterGlow)" id="hud-core-halo" />
+
+          <!-- Sweeping Radar Sector Wedge -->
+          <g id="hud-radar-wedge" opacity="0">
+            <path d="M 0 0 L -155 -155 A 220 220 0 0 1 65 -210 Z" fill="url(#radarBeamGrad)" />
+            <line x1="0" y1="0" x2="65" y2="-210" stroke="#00f0ff" stroke-width="1.5" opacity="0.75" />
+          </g>
+
+          <!-- Outer Azimuth Ring -->
+          <g id="hud-ring-outer" opacity="0">
+            <circle cx="0" cy="0" r="220" fill="none" stroke="rgba(0, 240, 255, 0.24)" stroke-width="1.2" stroke-dasharray="4 8" />
+            <circle cx="0" cy="0" r="204" fill="none" stroke="rgba(255, 255, 255, 0.12)" stroke-width="1" />
+            <path class="hud-draw-path" d="M -220 0 A 220 220 0 0 1 -155 -155" fill="none" stroke="#00f0ff" stroke-width="2.2" />
+            <path class="hud-draw-path" d="M 220 0 A 220 220 0 0 1 155 155" fill="none" stroke="#10b981" stroke-width="2.2" />
+          </g>
+
+          <!-- Inner Counter-Rotating Optical Ring -->
+          <g id="hud-ring-inner" opacity="0">
+            <circle cx="0" cy="0" r="148" fill="none" stroke="rgba(0, 240, 255, 0.22)" stroke-width="1.2" stroke-dasharray="28 14 6 14" />
+            <circle cx="0" cy="0" r="106" fill="none" stroke="rgba(16, 185, 129, 0.2)" stroke-width="1" stroke-dasharray="6 10" />
+          </g>
+
+          <!-- Dynamic Artificial Horizon & Pitch Ladder -->
+          <g id="hud-pitch-group" opacity="0">
+            <line x1="-175" y1="0" x2="-58" y2="0" stroke="rgba(0, 240, 255, 0.65)" stroke-width="1.6" />
+            <line x1="58" y1="0" x2="175" y2="0" stroke="rgba(0, 240, 255, 0.65)" stroke-width="1.6" />
+            <path d="M -38 -42 L -16 -42 L -16 -36 M 38 -42 L 16 -42 L 16 -36" fill="none" stroke="rgba(255,255,255,0.65)" stroke-width="1.4" />
+            <path d="M -38 42 L -16 42 L -16 36 M 38 42 L 16 42 L 16 36" fill="none" stroke="rgba(255,255,255,0.65)" stroke-width="1.4" stroke-dasharray="4 3" />
+            <!-- Center Boresight Cross -->
+            <path d="M -22 0 L -7 0 L -7 5 M 22 0 L 7 0 L 7 5" fill="none" stroke="#ffffff" stroke-width="2" />
+            <circle cx="0" cy="0" r="3" fill="#00f0ff" />
+          </g>
+
+          <!-- Left & Right Speed / Altitude Scales on HUD Reticle -->
+          <g id="hud-scale-bars" opacity="0" stroke="rgba(0, 240, 255, 0.45)" stroke-width="1.3" fill="none">
+            <path d="M -248 -65 L -260 -65 L -260 65 L -248 65" />
+            <line x1="-260" y1="-32" x2="-251" y2="-32" />
+            <line x1="-260" y1="0" x2="-246" y2="0" stroke="#00f0ff" stroke-width="2" />
+            <line x1="-260" y1="32" x2="-251" y2="32" />
+            <text x="-268" y="4" text-anchor="end" fill="#00f0ff" font-family="var(--font-mono)" font-size="10" font-weight="700" stroke="none">SPD 68</text>
+
+            <path d="M 248 -65 L 260 -65 L 260 65 L 248 65" />
+            <line x1="260" y1="-32" x2="251" y2="-32" />
+            <line x1="260" y1="0" x2="246" y2="0" stroke="#10b981" stroke-width="2" />
+            <line x1="260" y1="32" x2="251" y2="32" />
+            <text x="268" y="4" text-anchor="start" fill="#10b981" font-family="var(--font-mono)" font-size="10" font-weight="700" stroke="none">ALT 120m</text>
+          </g>
+
+          <!-- 3 Tactical Sector Targets INSIDE Radar Range + Unobstructed Outward Labels -->
+          <g id="hud-sector-links" fill="none">
+            <!-- Sector 01: Inside Lower-Left Radar -->
+            <g class="sector-pin-group" id="sector-pin-1" opacity="0">
+              <circle cx="-135" cy="74" r="5.5" fill="#10b981" />
+              <circle cx="-135" cy="74" r="13" stroke="#10b981" stroke-width="1.4" stroke-dasharray="4 3" />
+              <polyline class="hud-leader-line" id="leader-line-1" points="-135,74 -205,98 -415,98" stroke="#10b981" stroke-width="1.6" stroke-dasharray="360" stroke-dashoffset="360" />
+              <text x="-415" y="89" text-anchor="start" fill="#10b981" font-family="var(--font-mono)" font-size="11" font-weight="700">SEC-01 // URBAN ACADEMY</text>
+            </g>
+
+            <!-- Sector 02: Inside Upper-Right Radar -->
+            <g class="sector-pin-group" id="sector-pin-2" opacity="0">
+              <circle cx="132" cy="-108" r="5.5" fill="#00f0ff" />
+              <circle cx="132" cy="-108" r="13" stroke="#00f0ff" stroke-width="1.4" stroke-dasharray="4 3" />
+              <polyline class="hud-leader-line" id="leader-line-2" points="132,-108 215,-138 415,-138" stroke="#00f0ff" stroke-width="1.6" stroke-dasharray="360" stroke-dashoffset="360" />
+              <text x="415" y="-147" text-anchor="end" fill="#00f0ff" font-family="var(--font-mono)" font-size="11" font-weight="700">SEC-02 // METRO CIRCUIT</text>
+            </g>
+
+            <!-- Sector 03: Inside Lower-Right Radar -->
+            <g class="sector-pin-group" id="sector-pin-3" opacity="0">
+              <circle cx="135" cy="74" r="5.5" fill="#ef4444" />
+              <circle cx="135" cy="74" r="13" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="4 3" />
+              <polyline class="hud-leader-line" id="leader-line-3" points="135,74 205,98 415,98" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="360" stroke-dashoffset="360" />
+              <text x="415" y="89" text-anchor="end" fill="#f87171" font-family="var(--font-mono)" font-size="11" font-weight="700">SEC-03 // VALLEY FRONT</text>
+            </g>
+          </g>
+        </g>
+      </svg>
+    </div>
+
+    <!-- LAYER 2: TIER-1 HERO SCREEN (Title Emblem + 3 Mode Nodes Integrated in Viewport) -->
+    <div class="hero-tier1-stage" id="hero-tier1-stage">
+      <!-- Top Integrated Title Emblem -->
+      <header class="hero-title-cluster" id="hero-title-cluster">
+        <h1 class="hero-main-title modal-title" id="intro-hero-main">天空之眼：無人機戰術模擬</h1>
+        <p class="hero-sub-title modal-subtitle" id="intro-hero-sub">SKY EYE // UAV TACTICAL SIMULATOR</p>
+      </header>
+
+      <!-- Bottom-Docked 3 Integrated Holographic Mode Nodes (Directly in HUD) -->
+      <div class="mode-cards-grid hero-modes-dock" role="tablist" aria-label="三大主要遊戲模式">
+        <!-- MODE 01: 飛行訓練 -->
+        <div class="mode-select-card hero-mode-node node-emerald selected" role="tab" tabindex="0" aria-selected="true" data-category="training" data-mode="training" data-description="循序漸進的六階段操作考照課綱！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。" aria-describedby="menu-summary-mode">
+          <span class="hud-node-corner tl"></span><span class="hud-node-corner tr"></span>
+          <span class="hud-node-corner bl"></span><span class="hud-node-corner br"></span>
+          <div class="hero-node-head">
+            <span class="mode-card-tag tag-emerald">SECTOR 01 // ACADEMY</span>
+          </div>
+          <div class="hero-node-body">
+            <svg class="hero-node-viz" viewBox="0 0 64 44" aria-hidden="true">
+              <circle cx="32" cy="22" r="16" fill="none" stroke="rgba(16,185,129,0.35)" stroke-width="1.4" stroke-dasharray="4 3" />
+              <line class="viz-horizon" x1="10" y1="22" x2="54" y2="22" stroke="#10b981" stroke-width="2" />
+              <path d="M 24 15 L 40 15 M 24 29 L 40 29" stroke="#34d399" stroke-width="1.4" />
+              <circle cx="32" cy="22" r="2.5" fill="#10b981" />
+            </svg>
+            <div class="hero-node-text">
+              <div class="mode-card-title">飛行訓練</div>
+              <div class="mode-card-caption">六階段基礎飛控考照課綱</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODE 02: 飛行競速 -->
+        <div class="mode-select-card hero-mode-node node-cyan" role="tab" tabindex="0" aria-selected="false" data-category="racing" data-mode="single_race" data-description="高速穿越台灣城中街區 6 座空中檢查門與鐵道平交道！提供「單人計時賽」與「雙人競速」兩種模式。" aria-describedby="menu-summary-mode" aria-controls="submenu-racing" aria-expanded="false">
+          <span class="hud-node-corner tl"></span><span class="hud-node-corner tr"></span>
+          <span class="hud-node-corner bl"></span><span class="hud-node-corner br"></span>
+          <div class="hero-node-head">
+            <span class="mode-card-tag tag-cyan">SECTOR 02 // CIRCUIT</span>
+          </div>
+          <div class="hero-node-body">
+            <svg class="hero-node-viz" viewBox="0 0 64 44" aria-hidden="true">
+              <polygon points="32,5 54,16 54,32 32,39 10,32 10,16" fill="none" stroke="#00f0ff" stroke-width="1.6" />
+              <polygon points="32,12 45,19 45,29 32,33 19,29 19,19" fill="none" stroke="rgba(0,240,255,0.45)" stroke-width="1.2" />
+              <path d="M 24 24 L 32 16 L 40 24" fill="none" stroke="#ffffff" stroke-width="2" />
+            </svg>
+            <div class="hero-node-text">
+              <div class="mode-card-title">飛行競速</div>
+              <div class="mode-card-caption">單人計時賽 · 雙人全息對決</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODE 03: 實戰演練 -->
+        <div class="mode-select-card hero-mode-node node-crimson" role="tab" tabindex="0" aria-selected="false" data-category="tactical" data-mode="tactical_strike" data-description="深入山谷前線執行光學偵蒐與 CCIP 精準打擊！提供「戰場投彈」、「夜間突擊」與「極限飛行（惡劣天候）」三項演練。" aria-describedby="menu-summary-mode" aria-controls="exercise-selector" aria-expanded="false">
+          <span class="hud-node-corner tl"></span><span class="hud-node-corner tr"></span>
+          <span class="hud-node-corner bl"></span><span class="hud-node-corner br"></span>
+          <div class="hero-node-head">
+            <span class="mode-card-tag tag-crimson">SECTOR 03 // STRIKE OPS</span>
+          </div>
+          <div class="hero-node-body">
+            <svg class="hero-node-viz" viewBox="0 0 64 44" aria-hidden="true">
+              <circle cx="32" cy="22" r="15" fill="none" stroke="#ef4444" stroke-width="1.6" />
+              <line x1="12" y1="22" x2="24" y2="22" stroke="#ef4444" stroke-width="1.5" />
+              <line x1="40" y1="22" x2="52" y2="22" stroke="#ef4444" stroke-width="1.5" />
+              <line x1="32" y1="4" x2="32" y2="14" stroke="#ef4444" stroke-width="1.5" />
+              <line x1="32" y1="30" x2="32" y2="40" stroke="#ef4444" stroke-width="1.5" />
+              <circle cx="32" cy="22" r="3" fill="#f59e0b" />
+            </svg>
+            <div class="hero-node-text">
+              <div class="mode-card-title">實戰演練</div>
+              <div class="mode-card-caption">戰場投彈 · 夜間突擊 · 極限飛行</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LAYER 3: TIER-2 ADVANCED MISSION & ENVIRONMENT DECK (Shown after clicking a Mode Node) -->
+    <div class="modal-panel menu-command-deck tier2-hidden" id="menu-command-deck">
+      <div class="tier2-mode-banner" id="tier2-mode-banner">
+        <div class="tier2-banner-left">
+          <span class="tier2-eyebrow" id="tier2-eyebrow">SECTOR 01 // PILOT ACADEMY</span>
+          <h2 class="tier2-title" id="tier2-title">飛行訓練 — 進階航電與任務配置</h2>
+        </div>
+        <div class="menu-rotor-telemetry-pill" id="menu-rotor-status-pill">
+          <span class="rotor-spin-icon" aria-hidden="true">✦</span>
+          <span id="menu-rotor-rpm-text">SYS ARMED · POS-HOLD READY</span>
+        </div>
+      </div>
+
+      <!-- TIER 2: Dynamic Second-Level Sub-Menus & Curriculum Preview -->
+      <div class="submenu-stage" id="submenu-stage">
+        <!-- Sub-panel A: Flight Training 6-Module Preview -->
+        <div class="submenu-panel" id="submenu-training" aria-label="飛行訓練六階段課綱">
+          <div class="submenu-header-row">
+            <span class="submenu-tier-label label-emerald">TRAINING SYLLABUS // 六階段飛行考照課綱</span>
+            <span class="submenu-hint">完成全部 6 項實機考核即可獲頒「AAA 卓越飛行員認證」</span>
+          </div>
+          <div class="training-syllabus-strip">
+            <div class="syllabus-chip"><span>01</span> 垂直起降定高</div>
+            <div class="syllabus-chip"><span>02</span> 俯仰等速巡航</div>
+            <div class="syllabus-chip"><span>03</span> 偏航機頭轉向</div>
+            <div class="syllabus-chip"><span>04</span> 橫滾平移避障</div>
+            <div class="syllabus-chip"><span>05</span> 衝刺空中急煞</div>
+            <div class="syllabus-chip"><span>06</span> 綜合返航降落</div>
+          </div>
+        </div>
+
+        <!-- Sub-panel B: Flight Racing Second-Tier Menu -->
+        <div class="submenu-panel hidden" id="submenu-racing" role="region" aria-label="飛行競速第二層選單">
+          <div class="submenu-header-row">
+            <span class="submenu-tier-label label-cyan">SECOND TIER // 選擇飛行競速子模式</span>
+            <span class="submenu-hint">請選擇單人極限計時或雙人全息影子對決</span>
+          </div>
+          <div class="submode-cards-row two-cols">
+            <button type="button" class="submode-option race-sub-option selected" data-race-mode="single_race" data-description="單人計時賽：獨自挑戰台灣城中街區 6 座空中檢查門與平交道走廊，追求零失誤極限單圈計時紀錄！" aria-pressed="true">
+              <div class="submode-option-top">
+                <span class="submode-code">RACE 01 // TIME ATTACK</span>
+                <span class="submode-pill">1P 單人刷圈</span>
+              </div>
+              <div class="submode-option-name">01　單人計時賽</div>
+              <div class="submode-option-desc">挑戰台灣城中街區 6 座檢查門，突破個人最佳單圈速度紀錄。</div>
+            </button>
+
+            <button type="button" class="submode-option race-sub-option" data-race-mode="versus_race" data-description="雙人競速：Player 1 與 Player 2 輪流挑戰城市賽道！P2 飛行時將同場出現 P1 的「全息影子無人機」同屏較勁。" aria-pressed="false">
+              <div class="submode-option-top">
+                <span class="submode-code">RACE 02 // GHOST VERSUS</span>
+                <span class="submode-pill">1v1 影子對決</span>
+              </div>
+              <div class="submode-option-name">02　雙人競速</div>
+              <div class="submode-option-desc">P1 與 P2 輪流上陣，P2 飛行時同場重現 P1 全息影子無人機同屏對決。</div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sub-panel C: Tactical Exercise Second-Tier Menu -->
+        <div class="submenu-panel exercise-selector hidden" id="exercise-selector" role="region" aria-label="實戰演練項目">
+          <div class="submenu-header-row">
+            <span class="submenu-tier-label label-crimson exercise-selector-heading">SECOND TIER // 選擇實戰演練行動</span>
+            <span class="submenu-hint">點選不同演練項目將自動配置對應戰術環境，亦可於下方手動微調</span>
+          </div>
+          <div class="submode-cards-row three-cols">
+            <button type="button" class="submode-option exercise-option selected" data-exercise="tactical_strike" data-preset-time="day" data-preset-weather="clear" data-preset-sensor="visible" data-description="01 戰場投彈：日間標準前線演練。深入山谷擊毀 2 輛敵軍巡邏坦克、1 座雷達站與 1 座彈藥庫，並返航臨時放飛點結算。" aria-pressed="true">
+              <div class="submode-option-top">
+                <span class="submode-code">OP 01 // DAYLIGHT STRIKE</span>
+                <span class="submode-pill pill-crimson">標準實戰</span>
+              </div>
+              <span class="exercise-option-name submode-option-name">01　戰場投彈</span>
+              <span class="submode-option-desc">日間山谷前線標準打擊，運用垂直光學鏡頭與 CCIP 預測彈道摧毀敵方裝甲與設施。</span>
+            </button>
+
+            <button type="button" class="submode-option exercise-option" data-exercise="night_strike" data-preset-time="night" data-preset-weather="cloudy" data-preset-sensor="flir_white" data-description="02 夜間突擊：暗夜低能見度奇襲！自動配置「夜晚 + 白熱熱成像（FLIR）」，透過高熱源特徵鎖定敵軍坦克與防空雷達。" aria-pressed="false">
+              <div class="submode-option-top">
+                <span class="submode-code">OP 02 // NIGHT FLIR OPS</span>
+                <span class="submode-pill pill-amber">熱成像夜戰</span>
+              </div>
+              <span class="exercise-option-name submode-option-name">02　夜間突擊</span>
+              <span class="submode-option-desc">暗夜低能見度奇襲！自動開啟白熱熱成像（FLIR）鎖定敵軍引擎與雷達熱源。</span>
+            </button>
+
+            <button type="button" class="submode-option exercise-option" data-exercise="extreme_weather" data-preset-time="sunset" data-preset-weather="typhoon" data-preset-sensor="visible" data-description="03 極限飛行（惡劣天候）：颱風驟雨極限突防！在狂風亂流與下壓氣流中操控機體，結合風偏修正指標完成高難度投彈。" aria-pressed="false">
+              <div class="submode-option-top">
+                <span class="submode-code">OP 03 // TYPHOON BREACH</span>
+                <span class="submode-pill pill-purple">狂風驟雨</span>
+              </div>
+              <span class="exercise-option-name submode-option-name">03　極限飛行（惡劣天候）</span>
+              <span class="submode-option-desc">暴風雨強側風與下壓亂流突防！考驗極限抗風操控與大幅度風偏修正投彈。</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="mode-description-row">
+          <div class="mode-description" id="menu-summary-mode" aria-live="polite">循序漸進的六階段操作考照課綱！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。</div>
+        </div>
+      </div>
+
+      <!-- Flight Environment Settings -->
       <div class="menu-settings">
         <div class="menu-setting-row">
           <div class="setting-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 天色與時段 (T)</div>
@@ -530,15 +924,23 @@
         </div>
       </div>
 
-      <div class="cta-row">
-        <button class="primary-btn" id="btn-start-flight"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-start"></use></svg> <span lang="zh-TW">起飛</span> <span lang="en">START FLIGHT</span></button>
+      <div class="cta-row menu-cta-bar">
+        <div class="menu-selected-summary" id="menu-selected-mission-pill">
+          <span class="mission-pill-dot"></span>
+          <span>待命任務：</span>
+          <strong id="menu-active-mission-label">飛行訓練 — 六階段考照課綱</strong>
+        </div>
+        <div class="menu-cta-actions">
+          <button type="button" class="btn-back-tier1" id="btn-back-tier1">← 返回主畫面</button>
+          <button class="primary-btn" id="btn-start-flight"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-start"></use></svg> <span lang="zh-TW">起飛</span> <span lang="en">START FLIGHT</span></button>
+        </div>
       </div>
     </div>
   </div>
 
   <dialog class="modal-panel" id="tactical-briefing" aria-labelledby="tactical-briefing-title">
-    <header class="briefing-heading"><span>任務提示</span><h2 id="tactical-briefing-title">山谷前線行動</h2></header>
-    <p><strong>背景資訊</strong>山谷前線爆發交火。敵軍裝甲巡邏隊控制了谷底道路，山脊雷達站與坡腳彈藥庫仍在運作。你在山脊背坡的臨時放飛點待命。</p>
+    <header class="briefing-heading"><span id="tactical-briefing-eyebrow">任務提示 // OP-01</span><h2 id="tactical-briefing-title">山谷前線行動</h2></header>
+    <p><strong>背景資訊</strong><span id="tactical-briefing-bg">山谷前線爆發交火。敵軍裝甲巡邏隊控制了谷底道路，山脊雷達站與坡腳彈藥庫仍在運作。你在山脊背坡的臨時放飛點待命。</span></p>
     <p><strong>任務目標</strong>擊毀 <b class="briefing-target">2 輛敵軍巡邏坦克、1 座雷達站與 1 座彈藥庫</b>。</p>
     <p><strong>結算條件</strong>全數擊毀或用完 6 枚任務配額後，<b class="briefing-return">返回臨時放飛點，在四角標記之間的淡色十字附近降落結算</b>。</p>
     <p><strong>操作提示</strong><span class="briefing-control"><span>按</span><kbd>C</kbd><span>切換鏡頭，按</span><kbd>X</kbd><span>切換熱成像/夜視，按</span><kbd>Z</kbd><span>變焦，按</span><kbd>B</kbd><span>投彈。</span></span>每次最多掛載 2 枚，可返航補給，整趟任務最多投放 6 枚。</p>
@@ -566,6 +968,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.96"></script>
+  <script src="app.js?v=4.20"></script>
 </body>
 </html>

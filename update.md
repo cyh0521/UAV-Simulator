@@ -2,7 +2,7 @@
 > **文件性質**：AI 協同開發交接手冊 (AI-to-AI Technical Handover & Architecture Specification)  
 > **適用對象**：接續開發之 AI Assistant / 軟體工程師  
 > **核心目標**：提供專案全貌、代碼架構、數學模型、已知陷阱（Gotchas）及擴充接口，確保新 AI 接手時零落差無縫協同。  
-> **目前資源版本**　`app.js?v=3.96`、`style.css?v=3.22`
+> **目前資源版本**　`app.js?v=4.20`、`style.css?v=4.20`
 
 ---
 
@@ -24,6 +24,8 @@
 6. [歷次重大迭代與除錯里程碑 (Changelog)](#6-歷次重大迭代與除錯里程碑-changelog)
 7. [AI 接續開發之核心規範與高危地雷 (Crucial Gotchas & Invariants)](#7-ai-接續開發之核心規範與高危地雷-crucial-gotchas--invariants)
 8. [未來擴充路線圖與代碼插槽 (Roadmap & Extension Hooks)](#8-未來擴充路線圖與代碼插槽-roadmap--extension-hooks)
+9. [軍規地面導控站 Letterbox 航電版面升級 (v3.33 / v4.14)](#9-軍規地面導控站-letterbox-航電版面升級-v333--v414)
+10. [SKY EYE 開場動畫與雙層航電選單系統 (v4.20)](#15-sky-eye-開場動畫與雙層航電選單系統-v420)
 
 ---
 
@@ -53,7 +55,7 @@
 - **代碼組織風格**：
   - **原生標準 Vanilla JavaScript (ES6+)**。
   - **禁止**引入 Webpack/Vite 等重型打包工具，維持純靜態伺服器（或瀏覽器直開）隨時可運作。
-  - 資源快取控制：根目錄 `index.html` 目前載入 `app.js?v=3.93` 與 `style.css?v=3.22`。
+  - 資源快取控制：根目錄 `index.html` 目前載入 `app.js?v=4.20` 與 `style.css?v=4.20`。
 
 ---
 
@@ -62,9 +64,9 @@
 ```
 UAV Simulator/
 │
-├── index.html               # DOM 結構、HUD 儀表元件、SVG 人工水平儀、選單與培訓結業證書 Modal
-├── style.css                # 航電儀表深色主題、訓練導引卡、按鍵呼吸高亮動畫、考照證書版面
-├── app.js                   # 核心邏輯（單一原生 JavaScript 腳本，共 11,198 行）
+├── index.html               # DOM 結構、HUD 儀表元件、SVG 人工水平儀、開場向量 HUD 與雙層選單（共 973 行）
+├── style.css                # 航電儀表深色主題、開場動畫圖層、雙層選單樣式（共 3,586 行）
+├── app.js                   # 核心邏輯（單一原生 JavaScript 腳本，共 13,467 行）
 ├── update.md                # 本技術交接與架構規格手冊
 │
 ├── vendor/
@@ -267,6 +269,28 @@ ho_0 e^{-y/8500}$、高度風切梯度、尾翼未對齊前之非線性阻力曲
 
 #### 5. 零表情符號專業規範（Zero-Emoji Aviation Compliance）
 - 全系統抬頭顯示器、圖傳遙測、彈道指示與警報橫幅一律嚴禁出現表情符號（Emoji），採用純粹高科技航空電訊標準與專業英文/繁體中文軍規代碼（如 `VTX: -42dBm`、`ORD: 2 / 2`）。
+
+#### 6. 軍規地面導控站 Letterbox 航電版面架構 (GCS Ribbon Architecture - v4.14 / style v3.33)
+針對白天強烈陽光與複雜地面紋理造成純文字 HUD 辨識度降低的問題，採用現代軍規 UAV 地面導控站（GCS，如 Bayraktar TB2、MQ-9 Reaper）之「Letterbox 黑底航電資訊列」架構：
+- **頂部軍規 Letterbox 狀態列 (`.hud-top.gcs-bar-top`)**：
+  - 橫跨視窗全寬（高度 38px，`rgba(6, 10, 16, 0.94)`），底部搭配精細 1px 白光分界線。
+  - 左側：遙測與計時（`SAT 24` 定位鎖定、`24.8V 86%` 電壓與電量、`REC 00:00.00` 任務計時）。
+  - 中央：透明滑動航向羅盤刻度帶（340px 寬度，純粹幾何刻度線，居中 000° 航向讀數）。
+  - 右側：環境與飛控模式（`CALM 0.0 m/s` 環境風速、`P/R` 俯仰翻滾姿態、`POS-HOLD HOVER` / `CRUISE` / `SPORT MANUAL` 飛控狀態）。
+  - 所有遙測資訊具備深色底色列保護，徹底杜絕白天反光吃字問題，且完全無須依賴模糊光暈或陰影。
+- **戰術與訓練橫幅浮動錨定 (`.gcs-floating-banners`)**：
+  - 居中浮動於頂部 Letterbox 狀態列下方（`top: 46px`），保持 3D 視覺中心開闊。
+  - 整合檢查門航線導引、訓練模式導引卡片與戰術打擊目標橫幅（剩餘持彈 / CCIP / 目標統計）。
+- **兩側浮空航電 PFD 儀表 (`.osd-side-block`)**：
+  - 左側：`SPD GS` 地速儀表（大字體 `km/h`、小字 `m/s`、極細 2.5px 青藍色微光垂直刻度標尺）。
+  - 右側：`ALT AGL` 離地高度與 `VSI` 垂直升降速度動態箭頭與狀態指示標籤（升限 1500m）。
+- **底部軍規 Letterbox 資訊列 (`.hud-bottom.gcs-bar-bottom`)**：
+  - 橫跨視窗全寬（高度 36px，`rgba(6, 10, 16, 0.94)`）。
+  - 左側：戰術武裝掛載狀態（`ORDNANCE 82mm ×2 [ARMED]`）。
+  - 中央：GCS 鍵盤遙測操作快捷提示（`W/S 俯仰` `A/D 翻滾` `↑/↓ 升降` `←/→ 偏航` `C 投彈` `Space 懸停` `M 航圖` `V 視角`）。
+  - 右側：無人機即時坐標讀數（`POS X: 0m Z: 0m`）。
+- **戰術航圖（Minimap）懸浮停靠 (`.osd-minimap`)**：
+  - 停靠於右下角底部 Letterbox 上方（`bottom: 44px; right: 18px;`），維持半透明簡約邊框與高對比地形圖，國際軍規 `HOME` / `RTH` 起飛返航標記，不遮蔽任何底列文字。
 
 ---
 
@@ -786,6 +810,232 @@ ho_0 e^{-y/8500}$、高度風切梯度、尾翼未對齊前之非線性阻力曲
 
 ---
 
+### v4.01：真實操作失誤墜毀、斷槳雪花斷訊與檢查點懲罰重生系統 (2026-11-13)
+- **硬核操作失誤墜毀力學與動力切斷（Realistic Kinetic Crash & Motor Cutoff System）**：
+  - **高速撞擊墜毀（High-Speed Obstacle Impact）**：於 [`resolveBoxContact`](file:///g:/其他電腦/Mac mini/文件/My Briefcase/Coding/UAV Simulator - Gemini/app.js) 中，當撞擊相對法向速度 $\ge 7.2\text{ m/s}$（約時速 $26\text{ km/h}$）撞擊建築、橋樑、樹幹、高空電塔或戰車時，立即判定機體結構粉碎墜毀。
+  - **超速砸地與打地斷槳（Hard Ground Slam & Prop Strike）**：垂直下降率 $\ge 6.8\text{ m/s}$ 粗暴砸地，或水平衝刺速度 $\ge 8.5\text{ m/s}$ 伴隨機身大傾角（$>22^\circ$）翻滾著地時，判定起落架粉碎折斷、螺旋槳打地毀傷。
+  - **動力切斷與殘骸翻滾**：墜毀瞬間旋翼即時停轉、電機音效切斷、機身隨動能歪斜倒臥於地面，禁止任何搖桿操控輸入。
+- **類比 FPV 圖傳斷訊雪花與掃描撕裂（Analog VTX Signal Lost Snow & Glitch）**：
+  - 於 [`updateVTXOverlay`](file:///g:/其他電腦/Mac mini/文件/My Briefcase/Coding/UAV Simulator - Gemini/app.js) 中，墜毀當下全螢幕覆蓋高速動態類比電視雜訊雪花（White Noise Snow）、滾動水平同步撕裂黑白雜訊條，並彈出復古 OSD 警示字樣：`[ VTX SIGNAL LOST / 訊號中斷 ]` 與 `TRANSMITTER RX: 0 dBm`。
+  - 音效管線新增金屬碎裂與電機停轉失速音效（`audioEngine.playCrashShatter()`）。
+- **HUD 墜毀警示卡片與懲罰重生機制（Crash Detected Emergency Overlay & Respawn Pipeline）**：
+  - 畫面中央彈出高科技全息紅色墜毀卡片（`#crash-overlay`），詳細標示墜毀原因、撞擊瞬間時速與重生懲罰說明。
+  - **懲罰計入與重生按鍵**：
+    - 按下鍵盤 <kbd>R</kbd> 或點擊畫面上「立即重生 (R)」按鈕：
+      - 競速／培訓學校模式：加計 **+5.0 秒** 懲罰時間並累加失誤次數，重置於上一關卡檢查點起飛。
+      - 戰場投彈模式：扣除 **25 分** 戰術得分並計入墜毀失誤次數，重置於 FARP 前進放飛點重新整裝起飛。
+      - 重生當下平滑消除斷訊雪花、解鎖飛控動力與重設起落架。
+
+---
+
+### v4.00：六大氣候物理光影衰減與柔化陰影動態管線 (2026-11-13)
+- **天候光照散射與大氣柔化陰影物理模型（Atmospheric Weather Lighting & Shadow Attenuation Pipeline）**：
+  - **修復陰天死黑銳利硬陰影的不合理問題**：真實自然界中，陰天（Overcast/Cloudy）雲層具有強烈柔光漫射效應，直射日光絕大部分被散射為半球天光，不應產生如大晴天般輪廓清晰的深黑方向性硬影子。
+  - **六大天候光比配置表（`sunScale`, `hemiScale`, `shadowRadius`）**：
+    1. `clear`（晴天）：直射日光 $100\%$（`sunScale = 1.0`）、半球光 $1.0\times$、`shadowRadius = 1.0`（呈現銳利、深黑、輪廓明確之樹影與車影）。
+    2. `cloudy`（陰天）：直射日光衰減 $84\%$（`sunScale = 0.16`）、半球漫射天光大幅補償增強至 $1.48\times$、`shadowRadius = 3.8`（陰影大幅柔化擴散為極淡薄的環境微暗半影，消除突兀黑影）。
+    3. `drizzle`（細雨）：雨層雲阻隔，直射日光衰減 $92\%$（`sunScale = 0.08`）、半球天光 $1.28\times$、`shadowRadius = 4.8`（地表僅存幾乎不可察覺之極微弱漫射印記）。
+    4. `heavy_rain`（豪雨）：積雨烏雲蔽日，直射日光趨近零（`sunScale = 0.002`）、陰暗暴雨散射光（`hemiScale = 0.95`）、直射硬陰影完全消除。
+    5. `fog`（濃霧）：濃霧水汽全向米氏散射，直射日光完全歸零（`sunScale = 0.0001`）、均勻乳白環境天光包覆（`hemiScale = 1.35`）、徹底消除所有方向性硬陰影。
+    6. `typhoon`（颱風）：超厚眼牆黑雲帶，直射日光完全遮蔽（`sunScale = 0.001`）、昏暗暴風漫射光（`hemiScale = 0.72`）、無方向性日光陰影。
+  - **程序化 IBL（PMREM）天穹高光同步適配**：
+    - 於 [`applyTimeOfDay`](file:///g:/其他電腦/Mac mini/文件/My Briefcase/Coding/UAV Simulator - Gemini/app.js) 中將環境貼圖日輪反射強度同步乘以 `sunScale`，在陰雨霧天中自動消除地表與車輛漆面不合理的強烈高光白斑點。
+
+---
+
+### v3.99：三軸光電雲台真實物理動態系統（Inertial Lag, Silicone Damping & Airspeed Flutter）(2026-11-13)
+- **垂直下視鏡頭三軸陀螺增穩光電吊艙擬真力學（Realistic 3-Axis EO/IR Gimbal Dynamics）**：
+  - **機動慣性滯後與電機回正動態（Airframe Inertia Lag & Restoring Compliance）**：
+    - 模擬真實軍規與高階民用無刷增穩雲台的機動極限。雲台隔離約 $93\%$ 的機身傾斜，保留約 $6.8\%$ 的瞬時機動慣性滯後（Deflection 限幅約 $2.3^\circ$ / $0.040\text{ rad}$）。
+    - 當無人機猛烈推桿加速或急煞時，畫面會隨機身產生極其細緻的微幅慣性微傾，並在 $100 \sim 150\text{ms}$ 內由無刷電機臨界阻尼平滑拉回正下方鉛垂軸，賦予操作真實的航空機械生命力。
+  - **矽膠減震球彈性位移（Silicone Damping Balls Elastic Compliance）**：
+    - 依據無人機線性加速度向量 $\mathbf{a} = \Delta \mathbf{v}/\Delta t$，在雲台懸掛減震球支架上產生反向慣性力（$\mathbf{F} = -m\mathbf{a}$），在加減速與升降機動時提供 $1 \sim 3.5\text{ cm}$ 的彈性懸掛微動。
+  - **高速氣流風阻微顫與惡劣氣候擾動（Aerodynamic Airspeed Flutter & Storm Turbulence）**：
+    - 空速超過 $6\text{ m/s}$ 或遭遇微雨/豪雨/颱風暴風時，光電吊艙球罩受氣動紊流衝擊產生約 $10 \sim 14\text{ Hz}$、幅值 $<0.18^\circ$ 的高頻微顫，完全擺脫 3D 視圖死板不自然的絕對靜止。
+  - **CCIP 彈道解算與 ASL 瞄準引導線全動態投影補償**：
+    - 於 [`updateCCIP`](file:///g:/其他電腦/Mac mini/文件/My Briefcase/Coding/UAV Simulator - Gemini/app.js) 即時納入雲台瞬時俯仰（`gimbalPod.currentPitch`）與滾轉（`gimbalPod.currentRoll`）角度補償，使 2D SVG 投彈十字與 3D 地面 CCIP 標記完全重合，機動中瞄準手感與打擊精度分毫不差。
+
+---
+
+### v4.05：四軸軍規升限解放至 1500m 與航電環境風向即時解算系統（1500m Military Ceiling & Real-Time Wind Telemetry）(2026-11-13)
+- **四軸軍規實用升限解放（Military Practical Service Ceiling）**：
+  - **物理升限擴展**：將原本民用民航法規軟體限制的 $120\text{ m}$，全面解放至軍規戰術打擊/偵察多旋翼之實用升限 **$1,500\text{ m}$**（`PHYSICS.maxAltitude = 1500.0`）。
+  - **UI 標籤修正**：將原先「上限 120m」字樣修正為軍規標準「升限 1500m」，高度儀表條平滑映射高空視野。
+- **航電面板環境風向與風力即時解算（Real-Time Wind Vector & Beaufort Scale Telemetry）**：
+  - **第 4 格儀表升級**：原先僅顯示靜態 `P: 0° / R: 0°`（與中央人工地平儀重複），升級為核心氣象導航卡片：
+    - 即時風向動態箭頭（指向風的吹往方位）＋ 氣象來風方位角（如 `315° NW`）。
+    - 結合高空風切剪力模型（`computeWindShearMultiplier`）之實時動態風速（$\text{m/s}$）。
+    - 蒲福風力等級（Beaufort Scale）動態色碼標註（0級靜風至7級疾風）。
+    - 副指標保留動態姿態角與機動狀態（`P: -2° / R: 1° · CRUISE / BOOST / HOVER`）。
+
+---
+
+### v4.04：回歸硬核軍規戰術作戰純粹性 — 完整移除機載探照燈（Searchlight Removal & Passive Stealth Reversion）(2026-11-13)
+- **全面移除可見光探照燈系統**：
+  - **符合軍事實時作戰法則**：小型戰術打擊四軸機在前線夜戰中絕不配備主動可見光探照燈（避免違反光紀律、成為地面防空機槍活靶，並免除多餘無效負載）。
+  - **回歸被動感測主軸**：夜間作戰完全依託 **FLIR 白熱熱成像（Key `X`）** 與 **NVG 微光夜視** 系統，聚焦戰車熱特徵偵察與隱蔽打擊。
+  - **介面與資源徹底清理**：
+    - 移除下視光電 OSD 之 `LIGHT: OFF/ON` 標註。
+    - 移除暫停選單與 HUD 工具條之 `btn-searchlight` 按鈕。
+    - 移除底端操作提示 `L 探照燈`，還原清晰直覺之按鍵導引。
+    - 移除機體 3D 燈艙、聚光燈光源（`SpotLight`）及體積光錐網格，釋放場景繪製負擔。
+
+---
+
+### v4.02：真實空難失控翻滾下墜歷程與觸地結算狀態機（High-Altitude Tumble Crash & Delayed Settle）(2026-11-13)
+- **多階段空難物理狀態機（Multi-Phase Crash State Machine）**：
+  - 擴充機體物理狀態 `drone.crashState`：`'none'`（正常飛行）$\to$ `'tumbling'`（高空撞擊失控旋轉下墜）$\to$ `'settled'`（最終觸地殘骸結算）。
+  - **高空撞擊失控體驗（Visceral High-Altitude Death Roll）**：
+    - 當機體於高度（AGL > 1.8m）撞擊障礙物、建築、樹木、防空雷達或戰車時，**不立即彈出警示卡片與黑白雜訊**。
+    - 立即切換為 `'tumbling'` 狀態，賦予機體強烈且隨機的三軸失控角衝量（$11 \sim 20\,\text{rad/s}$），並保留部分殘留水平向量同時啟動真實重力暴衝下墜（$a_y = -13.5\,\text{m/s}^2$）。
+    - 螢幕中央觸發紅色緊急廣播 `[ OUT OF CONTROL / 姿態失控・失速墜落中！ ]`，音效引擎同步發出電機降頻與馬達短路顫音。
+  - **各鏡頭視角深度適配**：
+    - **FPV（第一人稱機載視角）**：完全解除飛控穩定視角限制，鏡頭嚴格依附旋轉機鼻，使用者將目睹天際線、地面與地貌高速翻滾旋轉直墜地面的臨場沉浸感。
+    - **Down（下視光電雲台視角）**：模擬三軸陀螺儀斷電失能，鏡頭跟隨失速機體甩盪旋轉。
+    - **Chase（第三人稱跟隨視角）**：攝影機從斜後上方跟隨下墜殘骸，目睹機體翻滾摔落地面。
+  - **VTX 類比傳輸畫面漸進損壞**：
+    - 失控翻滾期間（`'tumbling'`）：畫面維持 3D 地面與天空動態視野，疊加水平撕裂滾動掃描線（Glitch Tearing）、RGB 色差抖動與紅色緊急飛控失效告警 `⚠️ [ CRITICAL SYSTEM FAILURE: LOSS OF CONTROL ]`。
+    - 最終觸地砸毀時（`'settled'`）：機體觸地後立即觸發低頻巨響（`playCrashShatter`）與強烈視網膜閃爍，切換為滿版電視類比雪花黑白雜訊與 `VTX SIGNAL LOST`，並在觸地延遲約 0.45 秒後平滑浮現墜毀結算卡片（支援按 R 於檢查點/FARP 重生）。
+
+---
+
+### v4.01：真實碰撞墜毀斷槳、雪花斷訊與重生懲罰系統 (2026-11-13)
+- **致命碰撞判定（Catastrophic Impact Evaluation）**：
+  - 高速撞擊障礙（速度 $\ge 7.2\,\text{m/s}$ / $26\,\text{km/h}$）或垂直重砸地表（$\ge 6.8\,\text{m/s}$）判定為墜毀。
+  - 增加類比圖傳雪花雜訊畫布（VTX Overlay Canvas）與低頻粉碎音效（`playCrashShatter`）。
+- **FARP 前進基地重生懲罰**：
+  - 墜毀時於畫面上呈現詳細原因、撞擊時速與計分懲罰（競速加罰 +5 秒；戰場模式扣除 25 分）。
+
+---
+
+### v3.98：修復戰車重置時主砲管與排煙器垂直朝天異常 (2026-11-12)
+- **修正主砲管與排煙器重置旋轉角度（Fix Tank Barrel & Fume Extractor Elevation Reset）**：
+  - 由於 `CylinderGeometry` 在創建模組時幾何本身已預先執行 `.rotateX(Math.PI / 2)` 朝向前方，`resetTargetTank` 先前誤將 `parts.barrel.rotation.x` 與 `parts.fumeExtractor.rotation.x` 設為 `Math.PI / 2`，導致網格疊加旋轉 $90^\circ$ 而使戰車主砲管直挺挺朝向天空。
+  - 現已將初始旋轉精確修正為 `parts.barrel.rotation.set(0, 0, 0)` 與 `parts.fumeExtractor.rotation.set(0, 0, 0)`，主砲管完全恢復正常向前平射姿態。
+
+---
+
+### v3.97：戰車與陣地目標重置管線、無邊框簡約載入介面與真實百分比進度條 (2026-11-12)
+- **戰車與陣地目標完整重置管線（Comprehensive Target Tank & Facility Reset Pipeline）**：
+  - **擊毀狀態殘留徹底修復**：修復先前野外世界快取常駐時，重新開始任務未完整清理戰車火光與外觀戰損，導致新任務開場戰車依然呈現被擊毀冒火殘骸樣態的重大問題。
+  - **深層重置函式（`resetTargetTank` / `resetFacilityTarget`）**：
+    1. **狀態旗標全歸零**：重置 `hp = maxHp`、`destroyed = false`、`cookOff = false`、`coasting = false`、`coastSpeed = 0`、`trackDamaged = false`、`brokenTrackRibbonAdded = false`、`wreckSmokeTimer = 0`、`hitCount = 0`。
+    2. **殘留火光與損毀網格釋放**：移除並銷毀 `tank.wreckFire`（包含 PointLight 與發光精靈粒子）；清空並釋放 `damageGroup` 中所有立體彈坑（Impact Craters）、斷裂脫落之履帶緞帶（Broken Track Ribbons）以及車體烈焰精靈。
+    3. **構件幾何全復原**：砲塔復位並解鎖、主砲管解除液壓喪失垂頭（俯仰角歸零）、復原砲塔座圈與引擎破口遮罩（隱藏 `turretRingWell` 與 `engineBreachWell`）、重設排氣孔百葉窗、車長塔艙蓋閉合、復原通訊天線、負重輪軸心復位，並重新安裝完整的側裙裝甲板（`skirts`）、反應裝甲磚（`deckTiles`）與車尾雜物箱（`stowageBoxes`）。
+    4. **迷彩貼圖原廠重繪（`drawPristineTankCamouflage`）**：因戰車受損時會在專屬的 Canvas 畫布上即時繪製焦黑煙燻與氧化鐵鏽，重置時自動調用原廠迷彩生成器重新繪製全新的林地/三色迷彩，重設車體裝甲材質（`armorMat`）之顏色與粗糙度，並復原紅外線熱成象特徵（Thermal Signatures）。
+    5. **巡邏航線與座標歸位**：將戰車與其碰撞箱完整瞬移回道路起點出生座標（`spawnPos` 與 `spawnDir`），恢復正常行駛 patrol 狀態。
+- **無邊框簡約現代場景載入介面與確定性百分比進度條（Borderless Minimalist Loading Screen & Determinate Progress Bar）**：
+  - **移除外層卡片與大標題**：徹底移除舊版載入場景畫面的大標題與外層暗色卡片方框（Modal Panel Frame），實現乾淨純粹的浮空現代視覺。
+  - **確定性進度條取代來回掃瞄**：將 `<progress>` 由 HTML5 不確定掃瞄模式升級為具備 `max="100"` 與實時 `value` 驅動的**數值百分比進度條**。
+  - **細緻化載入步階與即時狀態日誌**：
+    - `0% ~ 15%`：解析地形網格、烘焙高程與坡度法線。
+    - `28% ~ 72%`：異步生成 3D 自然針葉/闊葉植被樹冠、灌木叢與地質崩岩。
+    - `85% ~ 95%`：構築軍規防空雷達陣地、前線彈藥掩體與重裝巡邏戰車。
+    - `100%`：完成物理碰撞體建置與光照烘焙，平滑淡出進入戰場。
+  - **視覺風格升級**：8px 圓角膠囊進度槽、高科技青藍色微光漸層（Cyan/Emerald Glow），搭配等寬字體與柔和文字陰影。
+- **極簡無框軍規 OSD (Pure Minimalist Floating Military OSD - v4.06)**：
+  - **徹底移除黑底遮擋方框**：移除儀表左下方 `#hud-telemetry-card` 外層暗色毛玻璃卡片與 4 個內嵌矩形色塊（`.metric-box`），解除對視野的遮蔽。
+  - **純透向量浮空排版 (Floating Vector Typography)**：比照現役真實軍規戰術無人機與 FPV 戰術 OSD，將地速（SPD）、高度（ALT）、升降（VSI）、風向與姿態（WND / ATT）改為無框懸浮向量字體，具備極高對比之雙層黑輪廓防眩文字陰影（`text-shadow: 0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.95), 0 0 14px rgba(0,240,255,0.4)`），無論在烈日、雲層或雜亂地形均能一目了然。
+  - **2px 戰術微光基準線 (Tactical Hairline Accents)**：在各項數據左側增設 2px 極細彩色微光基準線，取代笨重方框作為視覺定位錨點（地速青藍、高度翠綠、升降金黃、風向天藍）。
+  - **軍規精簡術語標籤**：標籤精簡為國際標準術語（`SPD 地速`、`ALT 高度`、`VSI 升降`、`WND 風向`），搭配超細進度計（2px hairline bar）。
+  - **全螢幕淨空度提升**：整體畫面保留 95% 以上無遮擋 3D 即時視線。
+- **極簡無框軍規 OSD 全螢幕空間重構 (Full Spatial Reconfiguration to Military PFD OSD - v4.07)**：
+  - **空總航空電子 PFD 規格重新佈局**：不再將所有數據擠在左下角，而是完整比照航空主飛行顯示器（Primary Flight Display）與真實軍規戰術無人機佈局：
+    - **左側垂直居中 (Screen Left Mid)**：懸浮地速儀（`SPD 地速`、大字體 `km/h`、小字 `m/s`、極細 2.5px 青藍色微光垂直刻度標線 `spd-tick` 與動態進度條）。
+    - **右側垂直居中 (Screen Right Mid)**：懸浮高度與升降儀（`ALT 高度 (AGL)`、`升限 1500m`、大字體 `m`、動態箭頭 `▲/▼/― VSI m/s`、`自動定高/地面效應` 狀態標籤、極細 2.5px 翠綠色微光垂直刻度標線 `alt-tick` 與高度計）。
+    - **頂端水平狀態帶 (Screen Top Ribbon)**：
+      - 左翼：`GPS 24`（綠燈）、`24.8V 86%` 電池、`P1`、`TIME` 任務計時、`TASK` 任務進度與碰撞計數。
+      - 中央：`000° N` 機頭航向指北與 360 度電子羅盤帶，下方依序懸浮航線導引/戰術打擊進度。
+      - 右翼：實時風向風速（`WND ↖ 315° NW 4.8m/s 4級 和風`）、姿態角（`P: 0° / R: 0°`）、飛行模式（`POS-HOLD / SPORT`）與 `BOOST / CRUISE`。
+    - **底部兩側 (Screen Bottom Corners)**：
+      - 左下：戰術掛載狀態帶（`PAYLOAD 82mm 迫彈 ×2 [ARMED]`，投擲後實時聯動扣除）。
+      - 右下：雷達小地圖（城市航圖 / 戰術雷達，極簡浮空）。
+  - **中央 95% 視野完全淨空**：中央十字準心、動態人工水平儀與 CCIP 動態預測落點完全懸空，無任何暗色卡片背景。
+- **真實軍規戰術 OSD 質感精煉與零跳動重構 (Zero-Jitter & Military Monochromatic Refinement - v4.08)**：
+  - **消除灰色低對比字體**：全面淘汰不易閱讀的暗灰色（`#94a3b8` / `#cbd5e1`），所有航空標籤與次級數據統一升級為高飽和清晰純白（`#ffffff`），在任何光線與地景皆能瞬間判讀。
+  - **移除科幻霓虹光暈，改採軍規黑邊輪廓**：徹底移除所有彩色光暈（`text-shadow: 0 0 10px ...`），改採軍規向量抬頭顯示器之 4 軸銳利黑邊描邊（`text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000`），字體邊緣乾淨俐落無雜訊。
+  - **色彩體系軍規收斂 (Monochromatic HUD)**：移除青/綠/琥珀/藍交雜之花俏遊戲感配色，正常飛行儀表一律採用純粹軍規純白（`#ffffff`），刻度線與進度條亦統一為純白極細基準標線；僅將顏色保留給真正緊急之警示狀態（如撞擊計數、6 級以上強風告警、渦環 VRS 失速、無彈藥等）。
+  - **右上角動態跳動徹底消除 (Fixed Bounding Slots)**：
+    - 將右上角風向、姿態角、飛行模式解耦為獨立固定寬度槽位（`osd-slot-wind` 175px、`osd-slot-att` 112px、`osd-slot-mode` 122px）。
+    - 姿態角數據採固定長度與正負號補零格式化（`P:+00° R:+00°`），搭配 `tabular-nums`，徹底解決每幀因角度位數變化導致鄰近文字左右晃動震顫之問題。
+
+- **航圖徹底無框化、零方框浮空戰術 OSD 與防擠壓層級重構 (Borderless Tactical Radar & Anti-Collision Hierarchy - v4.09)**：
+  - **航圖徹底無框化（Borderless Circular Tactical Radar）**：
+    - 徹底移除舊版 `.hud-card`、`.minimap-header`、標題文字 `戰術態勢雷達 (北方朝上)` 與外層厚重青色卡片邊框。
+    - 改為現代軍用無人機專屬之圓形無框戰術雷達（`.osd-borderless-minimap`），外緣僅保留 1.5px 微光圓形透鏡環，內部動態疊加軍用戰術同心測距環與四向微十字準星，座標以微型黑底半透膠囊（`#hud-coords`）精簡懸浮於圓內底部，滑鼠點擊或按下 `M` 鍵仍能流暢呼出全螢幕詳細航圖。
+  - **兩側數值完全分行解耦，根除文字重疊**：
+    - 徹底排查右側高度與升降計重疊擠壓 Bug（原先窄寬度內同行擠壓 `ALT 高度 1500m` 與 `―VSI` / `地面效應 IGE`）。
+    - 全面重構為垂直專用排版層級：
+      - **標題層 (`osd-metric-head`)**：左側 `SPD GS`；右側 `1500m ALT AGL`。
+      - **主數值層 (`osd-metric-primary`)**：超大純白等寬數字（`font-size: clamp(38px, 4.2vw, 52px)`，粗體 900），附帶單位 `km/h`、`m`。
+      - **次要數值層 (`osd-metric-secondary`)**：左側 `0.0 m/s`；右側 `― VSI 0.0 m/s`。
+      - **狀態指示層 (`osd-metric-tertiary`)**：右側獨立行排版 `.osd-state-pill`（`定高懸停` / `地面效應 IGE +28%` / `渦環 VRS`），絕對不與 VSI 同行擠壓。
+      - **基準標尺 (`meter-bar`)**：底部 2px 極細純白進度標線。
+  - **視野中央沉浸淨空：全數卡片外框化為浮空微膠囊**：
+    - 頂部羅盤（`.compass-container`）徹底去框，改為純淨透明滑動刻度帶，搭配正上方純白指針。
+    - 戰術打擊橫幅（`.tactical-card`）與新手訓練卡（`.training-card`）移除巨大黑底方形卡片，改為輕量化浮空半透明圓角微膠囊（Pill Chips），目標完成時亮起微綠光芒。
+    - 降落結算提示（`#landing-indicator`）從大方塊重構為極簡浮空微膠囊，視野中央淨空度提升至 98% 以上。
+
+- **天際高對比準星重繪、純粹極簡羅盤、矩形戰術航圖與一體化目標橫幅 (High-Contrast Reticle & Unified Tactical HUD - v4.10)**：
+  - **天際高對比姿態準星重繪 (High-Contrast Daylight Reticle)**：
+    - 徹底解決原先青藍色（`#00f0ff` / `rgba(0, 240, 255)`）準星線條在白天被藍天吞沒吃掉（Low Contrast against Blue Sky）之問題。
+    - 機體十字準心、俯仰天梯刻度全數升級為高反射純白（`#ffffff`，2.4px 筆觸），水平地平線改為軍規翡翠綠（`#22c55e`），外層虛線圓圈改為高透純白。
+    - 導入複合黑邊輪廓濾鏡（`filter: drop-shadow(0 0 1.2px #000) drop-shadow(0 1px 2px rgba(0,0,0,0.85))`），在亮白雲層、湛藍天空或深色山嶺地景皆能維持 100% 銳利辨識。
+  - **羅盤純化與全畫面黑框陰影去除 (Zero-Glow/Shadow Compass & Natural Typography)**：
+    - 羅盤（`.compass-container`、`.compass-heading-readout`）全面移除任何光暈（Glow）、陰影（Shadow）及黑框，還原為絕對純淨清透之軍規刻度帶。
+    - 全面清除數值文字四周四向 `-1px -1px 0 #000` 造成的「黑框髒字」視覺，回歸自然柔和的單層底層陰影（`text-shadow: 0 1px 2px rgba(0,0,0,0.75)`）。
+  - **矩形滿版戰術航圖（Rectangular Edge-to-Edge Minimap）**：
+    - 根除「圓形外框內放方形地圖」的突兀衝突，改為乾淨俐落之矩形無框航圖（`.osd-minimap`）。
+    - 移除原本圓形雷達遮罩與圓形測距環，地景滿版渲染至畫布邊緣（荒野填滿 `#374a35`，市區填滿 `#273549`），四角無死黑缺塊。
+  - **一體化戰術目標橫幅（Unified Tactical Strike Banner）**：
+    - 依照指令取消破碎分散的多個獨立微膠囊，重構為單一聚合的透明戰術條（`.tactical-banner`）。
+    - 上排一體化整合「持彈量 | CCIP 自動預測」，下排整合「坦克、雷達、彈藥庫」任務目標，達成整齊凝聚之軍規風格。
+  - **中央狀態通知說明與降噪**：
+    - 澄清「中央狀態通知」即為停於地面放飛點時出現之 `#landing-indicator`，將其下移至 `top: 74%` 並去除黑厚陰影，徹底避免遮蔽無人機本體。
+
+- **軍規真機俯仰天梯重繪、零陰影光暈純粹玻璃投影與頂欄航電規範化 (True Avionics Pitch Ladder, Zero Shadow/Glow & Clean Ribbon - v4.11)**：
+  - **中心俯仰天梯比照 MIL-STD-1787B 軍規標準重繪**：
+    - 徹底淘汰雜亂的多色混搭與非軍規外圈虛線大圓環。
+    - 全面統一為單一色調純淨純白（`#ffffff`，2px/1.6px 純線條）：
+      - **機體基準準星 (Boresight Symbol)**：標準微型機翼基準水線標（`-12` 處垂降 `4px` 尾標，中心帶有微型圓點）。
+      - **0° 人工水平線**：左右對稱實線（`-92` 至 `-40`，`40` 至 `92`）。
+      - **爬升天梯 (+5° / +10°)**：朝向水平線折角之實線階梯，兩端精確標註俯仰角數字 `5`、`10`。
+      - **俯衝天梯 (-5° / -10°)**：標準虛線階梯，兩端精確標註負角數字 `-5`、`-10`。
+  - **全面根除所有文字與線條之陰影、光暈與黑框 (Absolute Zero-Shadow/Glow Compliance)**：
+    - 全面移除 HUD 內部所有 `filter: drop-shadow(...)`、`text-shadow`、`box-shadow`。
+    - 還原為真實軍規抬頭顯示器與地面站 (GCS) 的純淨向量光學投影質感，字體與線條邊緣無任何髒黑偽影或科幻霓虹。
+  - **頂端航電資訊列淨化與術語規範化**：
+    - 徹底移除槽位之間突兀的「奇怪小灰點」（`<span class="osd-sep">·</span>`）。
+    - 修正綠色圓點被文字覆蓋之排版寬度 Bug，將語意模糊的 `GPS 24` 規範化為國際軍用航電標準 `SAT 24`（代表鎖定 24 顆導航衛星）。
+    - 徹底移除「戰場投彈 Hover」這種將遊戲模式與飛控狀態拼湊的混亂文字，改為正統航電飛控狀態：`POS-HOLD HOVER`（定點定高懸停）/ `POS-HOLD CRUISE`（定高巡航）/ `SPORT MANUAL`（全手動運動模式）。
+
+- **日間強光光學微墨底襯、半透明航圖與國際軍規 HOME 標記 (Daylight Smoked Underlay, Translucent Map & HOME Point - v4.12)**：
+  - **白晝強光純白 HUD 清晰度解決方案（Smoked Optical Underlay & Micro-Stroke）**：
+    - 排查日間強光、白雲與淺色沙地環境下純白字體對比度不足的問題。
+    - 採用現代高階軍用無人機地面站（GCS）標準做法：為頂部資訊列與兩側數據區配置極淡半透明深碳墨色底襯（`background: rgba(8, 14, 24, 0.45); backdrop-filter: blur(4px);`），並搭配 0.35px 高精度微描邊。
+    - 削弱日間後方 45% 的強烈背景雜光，使純白文字在烈日、雲層下對比度攀升至 7:1 以上，而在夕陽與夜晚則自然消隱融於暗空，兼顧穿透感與絕對可讀性。
+  - **戰術航圖全面改為半透明（Translucent Minimap）**：
+    - 將右下角戰術地圖由實心不透明底色改為穿透半透明渲染（荒野地景 `rgba(55, 74, 53, 0.68)`、市區地景 `rgba(39, 53, 73, 0.68)`、容器背景 `rgba(11, 19, 32, 0.65)`）。
+    - 航圖維持滿版邊緣對齊與簡潔座標，同時保有 3D 戰場後景的視覺穿透感。
+  - **返航點全面去中文化（Aviation Standard HOME / RTH）**：
+    - 將原本顯示於地圖起飛放飛點旁的中文「返航點 / 返航降落」徹底改為國際軍規與航空地面站標準之 **`HOME`** 與 **`RTH`**（Return to Home）。
+
+- **純粹純白向量字體（移除方案 B 微描邊）與極透光學毛玻璃底襯（強化方案 A 透明感） (Ultra-Clear Frosted Glass Underlay - v4.13)**：
+  - **移除方案 B（完全取消 `-webkit-text-stroke`）**：
+    - 徹底拔除文字邊緣的暗色微描邊，回歸 100% 純淨無修飾的純白字體，確保字型邊緣平滑細緻。
+  - **強化方案 A 透明感（Ultra-Transparent Frosted Glass）**：
+    - 將頂部資訊列（`.osd-top-left`、`.osd-top-right`）與兩側遙測數據區（`.osd-side-block`）的底襯不透明度大幅下調（由 `0.45` 降至清透的 `0.25`）。
+    - 提升背影模糊擴散至 `backdrop-filter: blur(6px)` 並搭配極細微光透鏡邊框（`border: 1px solid rgba(255, 255, 255, 0.08)`），呈現晶透的光學高透毛玻璃質感，在維持白天辨識度的同時，通透穿透感顯著倍增。
+  - **戰術目標橫幅同步升級極透玻璃質感**：
+    - `.tactical-banner` 同步下調底色至 `rgba(10, 17, 30, 0.4)`，全面維持半透明戰術航電一致性。
+
+- **軍規地面導控站 Letterbox 航電版面升級 (Letterbox Ground Control Station Ribbon Architecture - v4.14 / style v3.33)**：
+  - **全寬黑底頂部狀態列（GCS Top Ribbon）**：橫跨螢幕全寬（高度 38px，`rgba(6, 10, 16, 0.94)`），為 `SAT 24` 定位、`24.8V 86%` 電池、`REC` 任務計時、透明滑動羅盤帶、環境風速、姿態角 P/R 及飛控模式提供深色底色列保護，徹底杜絕日間反光吃字問題。
+  - **浮動任務導引錨定（Floating Tactical Banners）**：將航線導引、新手訓練卡與戰術打擊目標橫幅錨定於頂部狀態列下方（`top: 46px`），保持視野中央 95% 以上開闊淨空。
+  - **全寬黑底底部資訊列（GCS Bottom Ribbon）**：橫跨螢幕全寬（高度 36px，`rgba(6, 10, 16, 0.94)`），整合武裝掛載狀態（`ORDNANCE 82mm ×2 [ARMED]`）、操作熱鍵速查（`W/S/A/D/↑/↓/←/→/C/Space/M/V`）與即時座標讀數（`POS X: 0m Z: 0m`）。
+  - **戰術航圖停靠調整**：將右下角戰術航圖停靠於底部狀態列上方（`bottom: 44px; right: 18px`），避免遮蔽底列文字與座標。
+---
+
 ## 7. AI 接續開發之核心規範與高危地雷 (Crucial Gotchas & Invariants)
 
 接續開發的 AI 請務必嚴格遵守以下準則：
@@ -799,7 +1049,7 @@ ho_0 e^{-y/8500}$、高度風切梯度、尾翼未對齊前之非線性阻力曲
 4. **小心空間旋轉運算中的 NaN**：
    - 計算任何具有旋轉角度的建築物或附著招牌時，務必確保旋轉角與位置皆為合法的數字型別（Number）。
 5. **版本查詢字串同步機制**：
-   - 當修改 `app.js` 或 `style.css` 核心邏輯時，應同步檢查 `index.html` 內之版號查詢字串，避免瀏覽器快取舊版本代碼。
+   - 當修改 `app.js` 或 `style.css` 核心邏輯時，應同步檢查 `index.html` 內之版號查詢字串（如 `app.js?v=4.14` 與 `style.css?v=3.33`），避免瀏覽器快取舊版本代碼。
 
 ---
 
@@ -825,5 +1075,171 @@ ho_0 e^{-y/8500}$、高度風切梯度、尾翼未對齊前之非線性阻力曲
    - 插槽位置：在 `index.html` 增加觸控 Overlay，於 `app.js` 擴充 `touchstart` / `touchmove` 注入至 `sampleFlightControls()`。
 
 ---
-*文件修訂日期　2026 年 11 月 12 日 下午*  
+
+## 9. 軍規地面導控站 Letterbox 航電版面升級 (v3.33 / v4.14)
+
+針對白天強烈陽光與複雜地面紋理造成純文字 HUD 辨識度降低的問題，採用現代軍規 UAV 地面導控站（GCS，如 Bayraktar TB2、MQ-9 Reaper）之「Letterbox 黑底航電資訊列」架構：
+
+1. **頂部軍規 Letterbox 狀態列 (`.hud-top.gcs-bar-top`)**：
+   - 橫跨視窗全寬（高度 38px，`rgba(6, 10, 16, 0.94)`），底部搭配精細 1px 白光分界線。
+   - 左側：遙測與計時（`SAT 24` 定位、`24.8V 86%` 電壓與電量、`REC 00:00.00` 任務計時）。
+   - 中央：航向羅盤刻度帶（340px 寬度，無邊框純粹幾何刻度線，居中 000° 航向讀數）。
+   - 右側：環境與飛控模式（`CALM 0.0 m/s` 環境風速、`P/R` 俯仰翻滾姿態、`POS-HOLD HOVER` 飛控狀態）。
+   - 所有遙測資訊具備深色底色列保護，徹底杜絕白天反光吃字問題，且完全無須依賴模糊光暈或陰影。
+
+2. **戰術與訓練橫幅浮動錨定 (`.gcs-floating-banners`)**：
+   - 居中浮動於頂部 Letterbox 狀態列下方（`top: 46px`），保持 3D 視覺中心開闊。
+   - 整合檢查門航線導引、訓練模式導引卡片與戰術打擊目標橫幅（剩餘持彈 / CCIP / 目標統計）。
+
+3. **底部軍規 Letterbox 資訊列 (`.hud-bottom.gcs-bar-bottom`)**：
+   - 橫跨視窗全寬（高度 36px，`rgba(6, 10, 16, 0.94)`）。
+   - 左側：武裝掛載狀態（`ORDNANCE 82mm ×2 [ARMED]`）。
+   - 中央：GCS 鍵盤遙測操作快捷提示（`W/S 俯仰` `A/D 翻滾` `↑/↓ 升降` `←/→ 偏航` `C 投彈` `Space 懸停` `M 航圖` `V 視角`），兼具引導與軍規儀表沉浸感。
+   - 右側：無人機即時坐標讀數（`POS X: 0m Z: 0m`）。
+
+4. **戰術航圖（Minimap）懸浮停靠**：
+   - 停靠於右下角底部 Letterbox 上方（`bottom: 44px; right: 18px;`），維持半透明簡約邊框與高對比地形圖，不遮蔽任何底列文字。
+
+---
+
+## 10. 航電對齊精度校正、正確操作提示與地面停機物理鎖定 (v3.34 / v4.15)
+
+針對航電對齊精度、鍵位提示錯誤與地面物理真實性進行全面校正：
+
+1. **羅盤絕對水平與垂直置中 (`.hud-center-top`)**：
+   - 移除了先前覆蓋的 flex 樣式，改用 `position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);`，確保無論左右兩側遙測寬度如何變化，羅盤刻度帶與航向指針永遠 100% 數學精確對齊視窗正中心軸線。
+   - 航向度數讀數加上微型深色防疊底底框，避免與羅盤刻度線交疊。
+
+2. **上下 Letterbox 狀態列文字與符號垂直居中**：
+   - 全面統一狀態列子元素之 `line-height: 1` 與 `display: inline-flex; align-items: center;`，徹底消除不同字級字體基線落差。
+   - 移除 `.rec-dot` 上的多餘位移與模糊外光暈，與 `SAT 24` 綠色鎖定燈同步採用 6px 俐落微型指示點。
+
+3. **底部操作指引錯誤更正與動態鍵位提示 (`#gcs-bottom-hints`)**：
+   - **修正前之錯誤提示**：曾誤植為「W/S 俯仰、A/D 翻滾、↑/↓ 升降、←/→ 偏航、C 投彈」。
+   - **修正後之真實鍵位**（雙手模式）：
+     - `W/S` 升降（油門 Throttle）
+     - `A/D` 轉向（偏航 Yaw）
+     - `↑/↓` 前後（俯仰 Pitch）
+     - `←/→` 平移（翻滾 Roll）
+     - `Space` 懸停制動
+     - `B` 投彈（戰術任務模式專用）
+     - `C` 視角切換（追隨/FPV/俯視）
+     - `M` 航圖（全螢幕雷達）
+   - 新增 `updateGCSBottomHints()` 支援按 `K` 切換單手配置時動態更新為 `W/S 前後` `A/D 平移` `Q/E 轉向` `Shift/Ctrl 升降`。
+
+4. **著陸地面物理合理化（地面摩擦與旋翼反扭力鎖定）**：
+   - **航空物理依據**：多旋翼無人機無轉向輪或方向舵，停在地面時起落架與地表產生靜摩擦阻力，旋翼反扭力遠小於摩擦阻力矩，強行原地打轉或橫移在真實世界中是不可能且危險的（易卡地翻滾 打槳）。
+   - **物理機制實裝**：當無人機著陸停靠於地面（`agl <= 0.05m` 且垂直速度趨近 0、無上升油門）時：
+     - 自動鎖定偏航角速度：`drone.yawRate = 0`，不響應平地打轉輸入。
+     - 自動水平姿態：`drone.pitch = 0; drone.roll = 0`，消除起落架傾斜穿模。
+     - 地面靜摩擦制動：`drone.vel.x = 0; drone.vel.z = 0`，杜絕平地無動力滑行。
+     - 狀態顯示：HUD 右上角切換為 `GROUND`，高度階梯提示 `著陸地面`。
+     - **升空恢復**：只要推動上升油門（`W` 或 `Shift/U`），升力大於重力使機體升空脫離地面摩擦（`agl > 0.05m`）瞬間，偏航、俯仰、翻滾與平移動力無縫自然恢復。
+
+---
+
+## 11. 6S 鋰聚合物電池動態物理與負載壓降模擬 (v3.35 / v4.16)
+
+已正式實裝軍規與專業穿越機等級的「6S LiPo 動態電池物理放電模擬系統」：
+
+1. **真實 6S 鋰聚合物電池規格模型**：
+   - 電池組規格：6S 6000 mAh（標稱 22.2V，約 133 Wh）。
+   - 電壓化學放電曲線（`computeOpenCircuitVoltage6S`）：
+     - 充飽滿電（100%）：**25.20V**（單芯 4.20V）。
+     - 線性放電高原區（80% ~ 20%）：**23.40V ~ 21.60V**（單芯 3.90V ~ 3.60V）。
+     - 陡峭膝點驟降區（20% ~ 0%）：**21.60V ~ 19.50V**（單芯 3.60V ~ 3.25V）。
+
+2. **工況即時電流負載推算 (Load-Dependent Current Draw)**：
+   - **基底航電**：航電電腦、感測器、FPV 圖傳基底電流約 `0.8A`。
+   - **地面停機怠速**：著陸停靠時電機怠速電流約 `1.6A`。
+   - **定高懸停功耗**：依據機體總重（空機 8.5kg 或掛彈 11.7kg）與地面效應（IGE）計算懸停電流約 `14.2A ~ 19.5A`。
+   - **機動與爬升**：垂直爬升與傾角平移依據空速阻力與油門，電流提升至 `20A ~ 35A`。
+   - **Boost 極限加速**：按住 `Shift` 衝刺時電流飆升至 `48A ~ 54A`。
+
+3. **大油門電壓驟降 (Voltage Sag & Internal Resistance)**：
+   - 內阻模型：電芯封包內阻 $R_{internal} = 0.024\,\Omega$（$24\,\text{m}\Omega$）。
+   - 即時負載電壓：$V_{loaded} = V_{open\_circuit} - I \times R_{internal}$。
+   - 當玩家全油門衝刺時，瞬間壓降可達 **`0.8V ~ 1.2V`**；鬆開油門懸停時，電壓會依化學特性**平滑回彈**。
+
+4. **航電 OSD 即時顯示與雙階警戒保護**：
+   - 頂部 Letterbox 狀態列即時顯示更新為動態數值（例如 `24.6V 92%`）。
+   - **低電量警戒 (20%)**：電壓低於 21.6V 時，文字轉為警告橙色 `#f59e0b`，觸發 HUD 廣播提醒返航（RTH）。
+   - **臨界電量警戒 (10%)**：文字變為赤紅 `#ef4444` 並啟動閃爍警報，飛控自動限制爬升極限（Derating）防止炸機；0% 電量時動力中斷。
+   - 回合開始與重新放飛時自動調用 `resetDroneBattery()` 重置為充飽狀態。
+
+---
+
+## 12. 旋翼槳尖水氣渦流 (Tip Vortices Wake) 真實質感升級 (v4.17)
+
+將原先偏電玩風格的青藍色光軌，全面重構為符合航空空氣動力學與大氣物理的「真實微水氣渦流」系統：
+
+1. **真實大氣水氣微霧質感**：
+   - 告別高飽和青藍色雷射光線，改用大氣水霧白（`0xf1f5f9`）。
+   - 採用自訂 `ShaderMaterial` 搭配頂點透明度衰減屬性（`aAlpha`），實現從旋翼端脫離至尾端隨紊流混合消散的非線性（$t^{1.6}$）平滑淡出，最大透明度限制於細緻半透明的 `0.05 ~ 0.32`。
+
+2. **航空氣動物理凝結臨界 (Aero-Physical Inception Threshold)**：
+   - **平穩巡航與懸停**：氣動負載低於凝結門檻，渦流透明度歸零，**完全不產生多餘線條**，畫面保持 100% 乾淨。
+   - **大 G 力與高升力機動**：當進行大油門衝刺（Boost / `Shift`）、高速（> 8.0 m/s）急轉大坡度傾斜時，槳尖壓差觸發露點凝結，自動拉出短暫的微弱水氣。
+   - **大氣濕度連動**：在霧天（Fog）、細雨（Drizzle）、暴雨（Heavy Rain）等潮濕天氣下，水氣更容易凝結生成；晴朗乾燥天候則僅在極限衝刺時微量可見。
+
+3. **旋翼幾何與下洗流動態整合**：
+   - 採樣點直接透過 `rotors[2].getWorldPosition()` 與 `rotors[3].getWorldPosition()` 精確錨定於旋翼電機中心，無論機身如何劇烈俯仰、翻滾與偏航，氣流源頭皆嚴格吻合實體槳葉。
+   - 脫離機體的渦流粒子隨旋翼強烈向下洗流（Downwash Drift）微幅下沉與擴散，展現真實流體力學尾流效果。
+
+---
+
+## 13. 氣流線無雨環境能見度優化與航行平穩度調校 (v4.18)
+
+針對無雨/晴朗環境下氣流線（槳尖渦流）辨識度不足，以及無風巡航時的微幅晃動進行空氣動力與飛控演算法深度調校：
+
+1. **晴天/無雨環境氣流線能見度全面優化 (Aero Wake Visibility Boost)**：
+   - **氣動空速解耦與能見度門檻微調**：將槳尖氣流生成邏輯由純大氣濕度門檻，升級為以「水平空速推進與轉向 G 力（Translational Airspeed & Maneuver G-Force）」為主的氣流流線模擬。在晴天（Clear）與無雨天候下，只要空速大於 1.8 m/s 並進行巡航或機動，即會自然生成真實微霧白（`#f8fafc`）的空氣動力流線。
+   - **緩衝點數量與透明度提升**：渦流點陣長度由 22 點擴展至 36 點（`TRAIL_MAX = 36`），最大透明度由 0.32 提升至 0.68，尾端衰減指數由 1.6 柔化至 1.25，確保在明亮天空與陸地背景下皆具備優雅、清晰且符合物理質感的絲滑微霧尾跡。
+   - **天候濕度加成**：雨天、大霧與颱風天候仍具備額外水氣濃度加成，呈現更厚實的冷凝拉煙效果。
+
+2. **無風環境航行晃動成因解析與平穩度調校 (Flight Stability Refinements)**：
+   - **實體無人機物理現實**：真實多旋翼在水平巡航時，因前進側與後退側槳葉相對空速不對稱（Blade Flapping & Translational Lift），以及飛控 IMU 陀螺儀高頻 PID 閉迴路微調（Micro-corrections），機身本來就會有 ±1° 左右的微動姿態。然而航拍畫面之所以完全靜止，是因為高精度無刷機械 3 軸雲台（Gimbal）與 EIS 電子增穩將機身晃動濾除。
+   - **平穩模式姿態動態臨界阻尼化 (Critical Damping)**：在 `PHYSICS.stabilized` 模式下，將二階旋轉阻尼比 $\zeta$ 由欠阻尼的 `0.88` 調升至接近臨界阻尼的 `0.98`，徹底消除鍵盤階躍給舵時的二階回彈振盪（Overshoot & Ringing）。
+   - **前傾升力補償強化 (Tilt-to-Lift Compensation)**：平穩模式下的前傾升力損失補償由 85% 提升至 96%，大幅減緩前傾加速時的垂直速度微幅下沉與定高沉浮反彈。
+   - **第三人稱相機追蹤相位差同步 (Synchronous Camera Lerp)**：將追蹤相機的位置（`smoothCamPos`）與注視點（`smoothLookAt`）平滑插值速率統一同步為 `11.5 * dt`，徹底消除加速度變更時因差頻產生的鏡頭俯仰呼吸擺動感。
+   - **光電瞄準吊艙晴朗無風零顫動**：針對下視投彈瞄準畫面，在晴朗無風天候下關閉人工風速氣流擾動（`weatherMult = 0.0`），十字準星瞄準極限穩定。
+
+---
+
+## 14. 氣流線物理寫實與視覺美感的黃金折中調校 (v4.19)
+
+針對氣流線「太容易出現」的視覺反饋，在「真實物理規律」與「飛行視覺效果」之間取得精確的動態平衡：
+
+1. **多階動態觸發臨界 (Multi-Tier Inception Threshold)**：
+   - **低速懸停與緩慢平移（< 5.0 m/s）**：渦流能量低於觸發門檻，**完全不生成任何氣流線條**。起降、懸停、低速微調對位時畫面保持 100% 乾淨透明，徹底杜絕多餘視覺干擾。
+   - **高速巡航（> 7.5 ~ 8.0 m/s）**：晴天環境下推進空速超越物理基線時，旋翼後方開始羽化出細緻半透明的微白水霧流線（透明度約 `0.16 ~ 0.25`）。
+   - **大 G 力機動與急速轉向**：進行急傾斜大坡度轉彎（High-G Banking）或大角度俯仰時，旋翼負載驟增，流線會動態加深至 `0.30 ~ 0.45`。
+   - **全油門衝刺（Boost / Shift）**：展現強烈氣動壓差，拉出厚實飽滿的空氣動力尾流（透明度達 `0.55 ~ 0.60`）。
+   - **天候動態濕度微調**：雨天、大霧天候因環境露點低，空速觸發門檻自調降至 ~3.6 m/s；晴天乾燥天候則維持高門檻，展現合理的大氣物理規律。
+
+2. **長度與平滑消散調校 (Refined Tail Dissipation)**：
+   - 取樣長度折中定為 **28 點（`TRAIL_MAX = 28`）**，既保有轉彎時的流體弧度，又能在改平或減速時迅速自然消散（~0.45 秒完全淡出）。
+   - 採用無階躍非線性平滑插值（Lerp Rate 6.5x），告別瞬間開關式的生硬出現，呈現如絲般柔順的淡入與淡出。
+
+---
+
+## 15. SKY EYE 開場動畫與雙層航電選單系統 (v4.20)
+
+實作整合 3D 無人機實景運鏡、全螢幕向量光學 HUD 與雙層航電選單（`initSkyEyeIntroAndMenu`）：
+
+1. **置中放大雷達準星與扇區指引線 (`#hero-avionics-svg`)**：
+   - `#hud-reticle-core` 採用 `translate(0, -14) scale(1.16)` 鎖定於畫面正中央並適度放大。
+   - 三大任務扇區節點（`SEC-01 // URBAN ACADEMY`、`SEC-02 // METRO CIRCUIT`、`SEC-03 // VALLEY FRONT`）配置於雷達圓環範圍內，並透過向外延伸之折線指引線（`#leader-line-1` ~ `#leader-line-3`）標示名稱，避免與底部模式卡片重疊遮擋。
+   - 四幕 GSAP 時間軸（約 5.35 秒）完成鏡頭推進、光學掃描與模式節點進場；右下角不顯示略過按鈕，仍保留 `Space` / `Enter` / `Escape` 鍵盤快速略過功能。
+
+2. **選單互動回饋音效**：
+   - 保留基於 Web Audio API 的選單懸停／切換／點擊回饋音效，移除其他開場配樂與額外環境音效，維持簡潔明確的航電操作手感。
+
+3. **獨立第二層任務配置面板 (`#menu-command-deck`)**：
+   - **進入第二層即離開首頁動畫**：呼叫 `enterTier2Screen()` 時，淡出 `#intro-cinematic-stage` 並透過 `setSkyEyeMenuHologramVisible(false)` 與 `gsap.ticker` 狀態檢查（`introState.menuStage !== 'tier2'`）隱藏 3D 全像投影環；返回第一層或重播／略過動畫時同步恢復顯示。
+   - **精簡第二層導覽**：移除第二層頂部原本重複顯示第一層三大模式的快速切換頁籤列，專注於當前所選模式的子模式（競速雙模式／實戰三演練／訓練六階段課綱）與天色、視角、天候參數設定。
+   - **「返回主畫面」外框按鈕排版**：將 `#btn-back-tier1` 移至底部 `.menu-cta-bar` 的 `.menu-cta-actions` 內並置於「起飛」（`#btn-start-flight`）左側，採用與 `.primary-btn` 相同比例的圓角矩形（`border-radius: 10px`、`font-size: 16px`、`font-weight: 800`）與透明底青色外框樣式。
+
+---
+*文件修訂日期　2026 年 11 月 16 日*  
 *架構維護：Antigravity Agentic Assistant (Google DeepMind Team)*
