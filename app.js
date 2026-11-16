@@ -1,15 +1,14 @@
 /** AERO-X 3D UAV Simulator — Taiwan City Edition */
 const COURSE_GATES = [
-  { id: 1, pos: { x: 0, y: 10, z: -48 }, rotY: 0, radius: 5.5, name: '1號門：騎樓商圈' },
-  { id: 2, pos: { x: 0, y: 11, z: -82 }, rotY: 0, radius: 5.5, name: '2號門：市區平交道' },
-  { id: 3, pos: { x: 0, y: 12, z: -120 }, rotY: 0, radius: 5.5, name: '3號門：中央車站路口' },
-  { id: 4, pos: { x: 72, y: 12, z: -120 }, rotY: -Math.PI / 2, radius: 5.5, name: '4號門：市民大道' },
-  { id: 5, pos: { x: 72, y: 12, z: -184 }, rotY: 0, radius: 5.5, name: '5號門：市民公園北口' },
-  { id: 6, pos: { x: 0, y: 10, z: -184 }, rotY: Math.PI / 2, radius: 5.5, name: '6號門：市民服務中心路口' }
+  { id: 1, pos: { x: -64, y: 12, z: -158 }, rotY: 0, radius: 10.0, name: '市立國小操場巡檢點' },
+  { id: 2, pos: { x: 0, y: 14, z: -110 }, rotY: 0, radius: 11.0, name: '市中心圓環地標' },
+  { id: 3, pos: { x: 64, y: 18, z: -156 }, rotY: -Math.PI / 4, radius: 10.0, name: '金融商辦外牆巡檢點' },
+  { id: 4, pos: { x: 52, y: 16, z: -48 }, rotY: 0, radius: 10.0, name: '商業大樓頂樓空投點' },
+  { id: 5, pos: { x: -56, y: 14, z: -56 }, rotY: Math.PI / 4, radius: 10.0, name: '老街騎樓商圈上空' },
+  { id: 6, pos: { x: 0, y: 12, z: -45 }, rotY: 0, radius: 10.0, name: '中央林蔭大道返航點' }
 ];
 const HELIPAD_POS = { x: 0, y: 0.85, z: 0 };
 const LANDING_RADIUS = 6.5;
-const RAILWAY_Z = -88;
 
 // ============================================================================
 // 2. STATE & PHYSICS PARAMETERS
@@ -239,10 +238,262 @@ window.addEventListener('keyup', (e) => {
   pressedKeys.delete(e.code);
 });
 
+const flightInput = document.getElementById('flight-input');
+const flightInputButtons = flightInput.querySelectorAll('button[data-val]');
+const gamepadHelp = document.getElementById('gamepad-help');
+let gamepadSelected = false;
+
+flightInputButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    gamepadSelected = button.dataset.val === 'gamepad';
+    flightInputButtons.forEach((option) => {
+      const selected = option === button;
+      option.classList.toggle('active', selected);
+      option.setAttribute('aria-pressed', String(selected));
+    });
+    gamepadHelp.hidden = !gamepadSelected;
+    updateGamepadConnectionStatus();
+    if (typeof window.updateTacticalBriefingDialog === 'function' && state.tacticalExercise) {
+      window.updateTacticalBriefingDialog(state.tacticalExercise);
+    }
+  });
+});
+
+let gamepadCameraPressed = true;
+let gamepadSensorPressed = true;
+let gamepadBombPressed = true;
+let gamepadZoomPressed = true;
+const gamepadFlightModes = new Set(['training', 'free_flight', 'single_race', 'versus_race', 'tactical_strike']);
+
+function getFlightGamepad() {
+  if (!gamepadFlightModes.has(state.gameMode) || document.hidden || !document.hasFocus()) return null;
+  return getSelectedGamepad();
+}
+
+function getSelectedGamepad() {
+  if (!gamepadSelected || document.hidden) return null;
+
+  return findCompatibleGamepad(readConnectedGamepads());
+}
+
+function findCompatibleGamepad(gamepads) {
+  const compatible = gamepads.filter((pad) => pad.axes.length >= 4);
+  return compatible.find((pad) => pad.mapping === 'standard') ?? compatible[0] ?? null;
+}
+
+function readConnectedGamepads() {
+  try {
+    return Array.from(navigator.getGamepads?.() ?? []).filter((pad) => pad?.connected);
+  } catch {
+    return [];
+  }
+}
+
+function updateGamepadConnectionStatus() {
+  if (!gamepadSelected) return;
+  const status = document.getElementById('gamepad-connection-status');
+  const gamepads = readConnectedGamepads();
+  const pad = findCompatibleGamepad(gamepads);
+  const savedMapping = pad && getSavedRightStickMapping(pad);
+  const needsCalibration = pad && !savedMapping && pad.mapping !== 'standard';
+  calibrateRightStickButton.hidden = !(needsCalibration || savedMapping);
+  calibrateRightStickButton.textContent = savedMapping ? '重新校正' : '校正右搖桿';
+  calibrateRightStickButton.classList.toggle('calibration-link', Boolean(savedMapping));
+  if (pad) {
+    status.textContent = savedMapping ? '已套用右搖桿校正。'
+      : needsCalibration ? '已偵測到手把，建議校正右搖桿。'
+      : '已偵測到標準配置手把，可直接使用。';
+  } else if (gamepads.length > 0) {
+    const axisCounts = gamepads.map((device) => device.axes.length).join('、');
+    status.textContent = `瀏覽器回報的手把軸數：${axisCounts}。雙搖桿操作需要至少 4 軸。`;
+  } else {
+    status.textContent = '瀏覽器尚未偵測到手把。';
+  }
+}
+
+window.addEventListener('gamepadconnected', updateGamepadConnectionStatus);
+window.addEventListener('gamepaddisconnected', updateGamepadConnectionStatus);
+window.addEventListener('focus', updateGamepadConnectionStatus);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) updateGamepadConnectionStatus();
+});
+
+const rightStickMappings = new Map();
+const rightStickStorageKey = 'uav-simulator.right-stick-mappings';
+
+try {
+  const savedMappings = new Map(JSON.parse(localStorage.getItem(rightStickStorageKey) ?? '[]'));
+  for (const [id, mapping] of savedMappings) {
+    const validAxis = (axis) => Number.isInteger(axis?.index) && axis.index >= 2
+      && (axis.direction === 1 || axis.direction === -1);
+    if (typeof id === 'string' && validAxis(mapping?.horizontal) && validAxis(mapping?.vertical)
+        && mapping.horizontal.index !== mapping.vertical.index) {
+      rightStickMappings.set(id, mapping);
+    }
+  }
+} catch {
+  // Storage can be unavailable. Calibration still works for this page.
+}
+const calibrateRightStickButton = document.getElementById('calibrate-right-stick');
+const rightStickStatus = document.getElementById('right-stick-status');
+
+calibrateRightStickButton.addEventListener('click', openRightStickDialog);
+
+const rightStickDialog = document.getElementById('right-stick-dialog');
+const rightStickInstruction = document.getElementById('right-stick-instruction');
+const rightStickStart = document.getElementById('right-stick-start');
+const rightStickClose = document.getElementById('right-stick-close');
+let calibrationFrame;
+
+function setRightStickStep(step, message) {
+  rightStickDialog.dataset.step = step;
+  rightStickInstruction.textContent = message;
+}
+
+function openRightStickDialog() {
+  rightStickStart.disabled = false;
+  rightStickStart.textContent = '開始校正';
+  rightStickClose.textContent = '取消';
+  setRightStickStep('ready', '請放開右搖桿，讓它回到中央，再按「開始校正」。');
+  rightStickDialog.showModal();
+}
+
+rightStickDialog.addEventListener('close', () => cancelAnimationFrame(calibrationFrame));
+
+rightStickStart.addEventListener('click', () => {
+  const pad = getSelectedGamepad();
+  if (!pad) {
+    setRightStickStep('ready', '尚未偵測到手把。請按一下手把按鍵後重試。');
+    return;
+  }
+
+  const center = Array.from(pad.axes);
+  let horizontal;
+  let waitingForCenter = false;
+  const start = performance.now();
+  rightStickStart.disabled = true;
+  rightStickClose.focus();
+  setRightStickStep('right', '請將右搖桿向右推到底。');
+
+  function finish(message) {
+    setRightStickStep('ready', message);
+    rightStickStart.disabled = false;
+    rightStickStart.textContent = '重試';
+    rightStickClose.textContent = '關閉';
+  }
+
+  function capture(now) {
+    if (!rightStickDialog.open) return;
+    const current = getSelectedGamepad();
+    if (!current || current.index !== pad.index || current.id !== pad.id || now - start > 20000) {
+      finish('校正已停止。請確認手把已連線，讓搖桿回中後再試。');
+      return;
+    }
+
+    const movement = center.map((value, index) => current.axes[index] - value);
+    if (waitingForCenter) {
+      if (Math.abs(movement[horizontal.index]) < 0.2) {
+        waitingForCenter = false;
+        setRightStickStep('up', '請將右搖桿向上推到底。');
+      }
+    } else {
+      let strongest = 0.6;
+      let axis;
+      for (let index = 2; index < movement.length; index++) {
+        if (index === horizontal?.index || Math.abs(movement[index]) <= strongest) continue;
+        strongest = Math.abs(movement[index]);
+        axis = { index, direction: Math.sign(movement[index]) };
+      }
+
+      if (axis && !horizontal) {
+        horizontal = axis;
+        waitingForCenter = true;
+        setRightStickStep('center', '請放開右搖桿，讓它回到中央。');
+      } else if (axis) {
+        rightStickMappings.set(pad.id, { horizontal, vertical: axis });
+        try {
+          localStorage.setItem(rightStickStorageKey, JSON.stringify([...rightStickMappings]));
+          rightStickStatus.textContent = '';
+        } catch {
+          rightStickStatus.textContent = '校正僅在本次開啟的頁面有效。';
+        }
+        updateGamepadConnectionStatus();
+        rightStickDialog.close();
+        return;
+      }
+    }
+    calibrationFrame = requestAnimationFrame(capture);
+  }
+
+  calibrationFrame = requestAnimationFrame(capture);
+});
+
+function getSavedRightStickMapping(gamepad) {
+  const mapping = rightStickMappings.get(gamepad.id);
+  return mapping && Math.max(mapping.horizontal.index, mapping.vertical.index) < gamepad.axes.length
+    ? mapping : null;
+}
+
+function sampleGamepadControls() {
+  const gamepad = getFlightGamepad();
+  if (gamepad) {
+    const rightStick = getSavedRightStickMapping(gamepad);
+    const axis = (index) => {
+      const value = gamepad.axes[index];
+      const deadzone = 0.15;
+      return Math.sign(value) * Math.max(0, (Math.min(1, Math.abs(value)) - deadzone) / (1 - deadzone));
+    };
+
+    // Use the standard shoulder button order for generic USB pads as well.
+    const cameraPressed = gamepad.buttons[5]?.pressed ?? false;
+    if (cameraPressed && !gamepadCameraPressed) toggleCameraMode();
+    gamepadCameraPressed = cameraPressed;
+    const sensorPressed = gamepad.buttons[4]?.pressed ?? false;
+    if (sensorPressed && !gamepadSensorPressed) cycleSensorMode();
+    gamepadSensorPressed = sensorPressed;
+
+    // Face buttons: Button 1 (B / Circle) & Button 0 (A / Cross) for bomb release in tactical mode
+    const bombPressed = ((gamepad.buttons[1]?.pressed ?? false) || (gamepad.buttons[0]?.pressed ?? false));
+    if (bombPressed && !gamepadBombPressed) {
+      if (state.gameMode === 'tactical_strike') {
+        dropBomb();
+      }
+    }
+    gamepadBombPressed = bombPressed;
+
+    // Button 2 (X / Square) for Nadir camera optical zoom
+    const zoomPressed = gamepad.buttons[2]?.pressed ?? false;
+    if (zoomPressed && !gamepadZoomPressed) {
+      if (state.cameraMode === 'down' && typeof cycleDownZoom === 'function') {
+        cycleDownZoom();
+      }
+    }
+    gamepadZoomPressed = zoomPressed;
+
+    return {
+      throttle: -axis(1),
+      yaw: -axis(0),
+      pitch: rightStick ? axis(rightStick.vertical.index) * rightStick.vertical.direction : -axis(3),
+      roll: rightStick ? axis(rightStick.horizontal.index) * rightStick.horizontal.direction : axis(2),
+      brake: gamepad.buttons[6]?.pressed ?? false,
+      boost: gamepad.buttons[7]?.pressed ?? false
+    };
+  }
+
+  gamepadCameraPressed = true;
+  gamepadSensorPressed = true;
+  gamepadBombPressed = true;
+  gamepadZoomPressed = true;
+  return null;
+}
+
 function sampleFlightControls() {
   if (state.menuOpen || state.pauseOpen || state.scoreboardOpen || state.mapOpen || state.countdownActive) {
     return { throttle: 0, yaw: 0, pitch: 0, roll: 0, brake: false, boost: false };
   }
+
+  const gamepad = sampleGamepadControls();
+  if (gamepad) return gamepad;
 
   let throttle = 0;
   let yaw = 0;
@@ -842,15 +1093,10 @@ const movingColliders = [];
 const signalIntersections = [];
 const outerMapRoads = [];
 const outerMapCourtyards = [];
-const CITY_BOUNDS = { halfWidth: 215, north: -325, south: 105 };
+const CITY_BOUNDS = { halfWidth: 150, north: -250, south: 50 };
 let updateSignals = () => {};
 let signalTime = 0;
 const townMapFeatures = [];
-let cityTrain = null;
-let trainStopRemaining = 0;
-const crossingArms = [];
-const crossingBarrierColliders = [];
-const crossingBarrierBounds = new THREE.Box3();
 const roadVehicles = [];
 
 function vehiclePart(parent, geometry, material, x, y, z, castShadow = false) {
@@ -926,43 +1172,299 @@ function buildRoadVehicles() {
     };
   });
 
+  const taxiMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.28, metalness: 0.25 });
+  const taxiSignMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+  const taxiEmptyMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+  const truckCabMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.34, metalness: 0.30 });
+  const truckBedMat = new THREE.MeshStandardMaterial({ color: 0xd4d4d8, roughness: 0.60, metalness: 0.25 });
+  const busGreenMat = new THREE.MeshStandardMaterial({ color: 0x166534, roughness: 0.34, metalness: 0.24 });
+  const busLedMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+  const amberMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+  const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.85, roughness: 0.18 });
+  const riderJacketMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.78 });
+  const backpackMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.82 });
+  const deliveryBoxMat = new THREE.MeshStandardMaterial({ color: 0xdb2777, roughness: 0.55 });
+  const helmetMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.28 });
+
+  // Sculpted moving scooter geometry + rider
+  const mvScShape = new THREE.Shape();
+  mvScShape.moveTo(-0.74, 0.46);
+  mvScShape.quadraticCurveTo(-0.78, 0.64, -0.54, 0.72);
+  mvScShape.lineTo(-0.14, 0.68);
+  mvScShape.quadraticCurveTo(-0.04, 0.42, 0.06, 0.36);
+  mvScShape.lineTo(0.28, 0.36);
+  mvScShape.quadraticCurveTo(0.36, 0.66, 0.38, 0.90);
+  mvScShape.quadraticCurveTo(0.46, 0.99, 0.56, 0.90);
+  mvScShape.quadraticCurveTo(0.68, 0.64, 0.64, 0.42);
+  mvScShape.lineTo(0.48, 0.33);
+  mvScShape.lineTo(0.24, 0.24);
+  mvScShape.lineTo(-0.38, 0.26);
+  mvScShape.quadraticCurveTo(-0.56, 0.42, -0.74, 0.46);
+  const mvScBodyGeo = new THREE.ExtrudeGeometry(mvScShape, {
+    depth: 0.28, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 2
+  });
+  mvScBodyGeo.translate(0, 0, -0.14);
+  const mvScWheelGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.12, 14);
+  const mvScFenderGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.14, 12, 1, false, -Math.PI * 0.35, Math.PI * 0.7);
+  mvScFenderGeo.rotateX(Math.PI / 2);
+
   const vanWindshield = new THREE.BoxGeometry(.045, .94, 1.52);
   const busWindshield = new THREE.BoxGeometry(.045, 1.14, 2.02);
+
   for (const [index, z] of CITY.streets.entries()) {
     for (const direction of [-1, 1]) {
-      const typeIndex = (index * 2 + (direction > 0 ? 1 : 0)) % types.length;
-      const type = types[typeIndex];
-      const model = models[typeIndex];
-      const car = new THREE.Group();
-      const body = paint[(index + direction + paint.length) % paint.length];
-      vehiclePart(car, model.shell, body, 0, 0, 0, true);
-      vehiclePart(car, model.glazing, glass, 0, 0, 0);
-      if (typeIndex === 1) vehiclePart(car, vanWindshield, glass, 1.04, 1.63, 0).rotation.z = .75;
-      if (typeIndex === 2) vehiclePart(car, busWindshield, glass, 4.88, 2.23, 0).rotation.z = .03;
-      vehiclePart(car, model.roof, typeIndex === 2 ? rubber : body, type.roof[0], type.roof[1], 0);
-      for (const end of [-1, 1]) {
-        vehiclePart(car, model.bumper, rubber, end * (type.length / 2 - .03), type.lightY - .23, 0);
-        vehiclePart(car, model.plate, plate, end * (type.length / 2 + .07), type.lightY - .23, 0);
-      }
-      for (const side of [-1, 1]) {
-        for (const x of [-type.axle, type.axle]) {
-          vehiclePart(car, model.tire, rubber, x, type.wheel, side * (type.width / 2 - .08)).rotation.x = Math.PI / 2;
-          vehiclePart(car, model.hub, rim, x, type.wheel,
-            side * (type.width / 2 - .067 + type.wheel * .32)).rotation.x = Math.PI / 2;
+      // Spawn 2 varied 4-wheel vehicles per lane (Taxi, Private Car, Truck, Bus)
+      for (let slot = 0; slot < 2; slot++) {
+        const vehicleKind = (index * 2 + (direction > 0 ? 1 : 0) + slot) % 5; // 0: Private, 1: Taxi, 2: SUV, 3: Blue Truck, 4: City Bus
+        const car = new THREE.Group();
+        let vLen = 4.35, vH = 1.65, vW = 1.77, label = '道路車輛';
+
+        if (vehicleKind === 3) {
+          // Taiwanese Classic Blue Cargo Truck (中華菱利/堅達風格藍色小貨車 - 流線車頭＋護欄貨斗＋貨物)
+          vLen = 4.85; vH = 2.15; vW = 1.82; label = '貨車';
+          const cabGeo = vehicleProfile([[0.68, 0.56], [0.68, 1.98], [1.65, 1.98], [2.22, 1.24], [2.26, 0.56]], 1.72, 0.08);
+          vehiclePart(car, cabGeo, truckCabMat, 0, 0, 0, true);
+          const cabGlass = vehiclePart(car, new THREE.BoxGeometry(0.06, 0.66, 1.54), glass, 1.96, 1.58, 0);
+          cabGlass.rotation.z = 0.62;
+          // Windshield wipers
+          for (const wz of [-0.36, 0.28]) {
+            const wp = vehiclePart(car, new THREE.BoxGeometry(0.02, 0.38, 0.025), rubber, 2.04, 1.42, wz);
+            wp.rotation.z = 0.62;
+            wp.rotation.x = 0.35;
+          }
+          vehiclePart(car, new THREE.BoxGeometry(0.08, 0.24, 1.38), rubber, 2.26, 0.92, 0); // Front grille
+          vehiclePart(car, new THREE.BoxGeometry(0.09, 0.04, 1.28), chromeMat, 2.27, 0.96, 0); // Grille chrome bar
+          vehiclePart(car, new THREE.BoxGeometry(0.18, 0.20, 1.78), rubber, 2.24, 0.52, 0); // Front bumper
+          vehiclePart(car, new THREE.BoxGeometry(3.05, 0.14, 1.82), rubber, -0.92, 0.58, 0); // Chassis bed
+          vehiclePart(car, new THREE.BoxGeometry(3.02, 0.44, 1.78), truckBedMat, -0.92, 0.86, 0, true); // Flatbed sides
+          // Flatbed cargo guard rails (貨斗護欄)
+          for (const railZ of [-0.87, 0.87]) {
+            vehiclePart(car, new THREE.BoxGeometry(2.96, 0.04, 0.04), truckBedMat, -0.92, 1.24, railZ);
+            for (const postX of [-2.35, -1.4, -0.45, 0.48]) {
+              vehiclePart(car, new THREE.BoxGeometry(0.045, 0.26, 0.045), truckBedMat, postX, 1.12, railZ);
+            }
+          }
+          vehiclePart(car, new THREE.BoxGeometry(0.05, 0.65, 1.72), truckBedMat, 0.56, 1.40, 0); // Cab-guard headboard
+          // Cargo boxes & strapped blue tarp load inside truck bed
+          vehiclePart(car, new THREE.BoxGeometry(1.38, 0.82, 1.48), new THREE.MeshStandardMaterial({ color: 0x1e40af, roughness: 0.72 }), -1.55, 1.38, 0, true);
+          vehiclePart(car, new THREE.BoxGeometry(1.15, 0.56, 1.35), new THREE.MeshStandardMaterial({ color: 0xb48a5a, roughness: 0.88 }), -0.15, 1.24, 0, true);
+          vehiclePart(car, models[0].plate, plate, 2.29, 0.54, 0);
+          vehiclePart(car, models[0].plate, plate, -2.44, 0.56, 0);
+          for (const side of [-1, 1]) {
+            for (const x of [-1.45, 1.45]) {
+              vehiclePart(car, models[0].tire, rubber, x, 0.36, side * 0.82).rotation.x = Math.PI / 2;
+              vehiclePart(car, models[0].hub, rim, x, 0.36, side * 0.89).rotation.x = Math.PI / 2;
+              vehiclePart(car, new THREE.CylinderGeometry(0.08, 0.08, 0.04, 8), chromeMat, x, 0.36, side * 0.90).rotation.x = Math.PI / 2;
+            }
+            vehiclePart(car, new THREE.BoxGeometry(0.04, 0.32, 0.28), rubber, -2.36, 0.40, side * 0.74); // Rear mudflap
+            vehiclePart(car, models[0].lamp, white, 2.25, 0.82, side * 0.64);
+            vehiclePart(car, new THREE.BoxGeometry(0.09, 0.14, 0.14), amberMat, 2.24, 0.82, side * 0.82); // Front amber blinker
+            vehiclePart(car, models[0].lamp, red, -2.43, 0.74, side * 0.64);
+            vehiclePart(car, new THREE.BoxGeometry(0.06, 0.12, 0.12), amberMat, -2.43, 0.74, side * 0.82); // Rear blinker
+            vehiclePart(car, new THREE.BoxGeometry(0.03, 0.03, 0.22), rubber, 1.98, 1.45, side * 0.88); // Mirror arm
+            vehiclePart(car, models[0].mirror, rubber, 2.02, 1.45, side * 0.98);
+          }
+        } else {
+          const typeIndex = vehicleKind === 4 ? 2 : (vehicleKind === 2 ? 1 : 0);
+          const type = types[typeIndex];
+          const model = models[typeIndex];
+          vLen = type.length; vH = type.roof[1] + 0.05; vW = type.width;
+          const isTaxi = vehicleKind === 1;
+          const isBus = vehicleKind === 4;
+          label = isTaxi ? '計程車' : (isBus ? '市區公車' : '私家車');
+          const body = isTaxi ? taxiMat : (isBus ? busGreenMat : paint[(index + direction + slot + paint.length) % paint.length]);
+          vehiclePart(car, model.shell, body, 0, 0, 0, true);
+          vehiclePart(car, model.glazing, glass, 0, 0, 0);
+          if (typeIndex === 0) {
+            // Front grille + chrome slat + shark-fin antenna on sedans/taxis
+            vehiclePart(car, new THREE.BoxGeometry(0.08, 0.22, 0.84), rubber, type.length / 2 - 0.04, type.lightY - 0.08, 0);
+            vehiclePart(car, new THREE.BoxGeometry(0.09, 0.035, 0.76), chromeMat, type.length / 2 - 0.03, type.lightY - 0.04, 0);
+            vehiclePart(car, new THREE.BoxGeometry(0.22, 0.09, 0.04), body, -0.95, type.roof[1] + 0.07, 0); // Shark-fin antenna
+          }
+          if (typeIndex === 1) {
+            vehiclePart(car, vanWindshield, glass, 1.04, 1.63, 0).rotation.z = .75;
+            vehiclePart(car, new THREE.BoxGeometry(0.08, 0.26, 1.02), rubber, type.length / 2 - 0.04, type.lightY - 0.04, 0);
+            vehiclePart(car, new THREE.BoxGeometry(0.09, 0.04, 0.92), chromeMat, type.length / 2 - 0.03, type.lightY, 0);
+          }
+          if (typeIndex === 2) {
+            vehiclePart(car, busWindshield, glass, 4.88, 2.23, 0).rotation.z = .03;
+            vehiclePart(car, new THREE.BoxGeometry(0.08, 0.26, 1.38), busLedMat, 4.90, 2.95, 0); // Front route LED
+            vehiclePart(car, new THREE.BoxGeometry(1.10, 0.20, 0.04), busLedMat, 2.40, 2.55, 1.26); // Side route LED
+            vehiclePart(car, new THREE.BoxGeometry(2.6, 0.24, 1.55), truckBedMat, 0.8, 3.36, 0); // Roof AC pod 1
+            vehiclePart(car, new THREE.BoxGeometry(2.0, 0.24, 1.55), truckBedMat, -2.2, 3.36, 0); // Roof AC pod 2
+            vehiclePart(car, new THREE.BoxGeometry(9.2, 0.22, 2.52), truckBedMat, 0, 1.38, 0); // Taipei bus waist stripe
+            vehiclePart(car, new THREE.BoxGeometry(0.06, 0.65, 1.80), rubber, -4.90, 1.15, 0); // Rear engine louver grille
+          }
+          vehiclePart(car, model.roof, isBus ? truckBedMat : body, type.roof[0], type.roof[1], 0);
+          if (isTaxi) {
+            vehiclePart(car, new THREE.BoxGeometry(0.32, 0.05, 0.44), rubber, 0.1, type.roof[1] + 0.05, 0);
+            vehiclePart(car, new THREE.BoxGeometry(0.24, 0.14, 0.36), taxiSignMat, 0.1, type.roof[1] + 0.13, 0);
+            vehiclePart(car, new THREE.BoxGeometry(0.04, 0.09, 0.18), taxiEmptyMat, 1.05, 1.16, -0.32); // "空車" LED indicator
+            vehiclePart(car, new THREE.BoxGeometry(3.15, 0.07, 1.80), rubber, -0.05, 0.72, 0); // Taxi side trim strip
+          }
+          for (const end of [-1, 1]) {
+            vehiclePart(car, model.bumper, rubber, end * (type.length / 2 - .03), type.lightY - .23, 0);
+            vehiclePart(car, model.plate, plate, end * (type.length / 2 + .07), type.lightY - .23, 0);
+          }
+          for (const side of [-1, 1]) {
+            for (const x of [-type.axle, type.axle]) {
+              vehiclePart(car, model.tire, rubber, x, type.wheel, side * (type.width / 2 - .08)).rotation.x = Math.PI / 2;
+              vehiclePart(car, model.hub, rim, x, type.wheel,
+                side * (type.width / 2 - .067 + type.wheel * .32)).rotation.x = Math.PI / 2;
+              vehiclePart(car, new THREE.CylinderGeometry(type.wheel * 0.22, type.wheel * 0.22, 0.035, 8), chromeMat, x, type.wheel,
+                side * (type.width / 2 - .062 + type.wheel * .32)).rotation.x = Math.PI / 2;
+            }
+            const glassSide = type.width / 2 + (typeIndex === 0 ? -.10 : .043);
+            for (const [x, y] of type.pillars) vehiclePart(car, model.pillar, body, x, y, side * glassSide);
+            if (!isBus) {
+              // Door handles
+              for (const hx of [-0.45, 0.42]) {
+                vehiclePart(car, new THREE.BoxGeometry(0.16, 0.04, 0.04), chromeMat, hx, type.lightY + 0.14, side * (type.width / 2 + 0.01));
+              }
+            }
+            vehiclePart(car, model.lamp, white, type.length / 2 - .06, type.lightY, side * type.width * .33);
+            vehiclePart(car, new THREE.BoxGeometry(0.09, 0.12, 0.12), amberMat, type.length / 2 - .08, type.lightY, side * type.width * .43);
+            vehiclePart(car, model.lamp, red, -type.length / 2 + .02, type.lightY, side * type.width * .33);
+            vehiclePart(car, new THREE.BoxGeometry(0.09, 0.12, 0.12), amberMat, -type.length / 2 + .02, type.lightY, side * type.width * .43);
+            const mx = typeIndex === 2 ? 4.35 : .80;
+            const my = typeIndex === 2 ? 2.13 : 1.25;
+            vehiclePart(car, new THREE.BoxGeometry(0.04, 0.04, 0.16), rubber, mx - 0.04, my, side * (type.width / 2));
+            vehiclePart(car, model.mirror, body, mx, my, side * (type.width / 2 + .08));
+          }
         }
-        const glassSide = type.width / 2 + (typeIndex === 0 ? -.10 : .043);
-        for (const [x, y] of type.pillars) vehiclePart(car, model.pillar, body, x, y, side * glassSide);
-        vehiclePart(car, model.lamp, white, type.length / 2 - .06, type.lightY, side * type.width * .33);
-        vehiclePart(car, model.lamp, red, -type.length / 2 + .02, type.lightY, side * type.width * .33);
-        vehiclePart(car, model.mirror, body, typeIndex === 2 ? 4.22 : .80,
-          typeIndex === 2 ? 2.13 : 1.25, side * (type.width / 2 + .06));
+        car.position.set(-110 + ((index * 53 + slot * 115 + direction * 23) % 220), .06, z + direction * 2.9);
+        car.rotation.y = direction === 1 ? 0 : Math.PI;
+        cityGroup.add(car);
+        roadVehicles.push({ car, direction, speed: 7.2 + ((index + slot) % 3) * 1.4 });
+        movingColliders.push({ object: car, w: vLen, h: vH, d: vW, label });
       }
-      car.position.set(-120 + index * 49 + direction * 23, .06, z + direction * 3.5);
-      car.rotation.y = direction === 1 ? 0 : Math.PI;
-      cityGroup.add(car);
-      roadVehicles.push({ car, direction, speed: 7.5 + index % 3 });
-      movingColliders.push({ object: car, w: type.length, h: type.roof[1] + .05, d: type.width, label: '道路車輛' });
+
+      // Moving Detailed Taiwanese 125cc Scooter + Articulated Helmeted Rider
+      const mScooter = new THREE.Group();
+      const mScColor = paint[(index + direction + 2) % paint.length];
+      vehiclePart(mScooter, mvScBodyGeo, mScColor, 0, 0, 0, true);
+      vehiclePart(mScooter, mvScFenderGeo, mScColor, 0.48, 0.28, 0); // Front fender
+      vehiclePart(mScooter, new THREE.BoxGeometry(0.46, 0.11, 0.24), new THREE.MeshStandardMaterial({ color: 0x1a1c20, roughness: 0.85 }), -0.31, 0.72, 0); // Saddle
+      vehiclePart(mScooter, mvScWheelGeo, rubber, 0.48, 0.24, 0).rotation.x = Math.PI / 2;
+      vehiclePart(mScooter, mvScWheelGeo, rubber, -0.48, 0.24, 0).rotation.x = Math.PI / 2;
+      vehiclePart(mScooter, new THREE.CylinderGeometry(0.14, 0.14, 0.13, 10), rim, 0.48, 0.24, 0).rotation.x = Math.PI / 2;
+      vehiclePart(mScooter, new THREE.CylinderGeometry(0.14, 0.14, 0.13, 10), rim, -0.48, 0.24, 0).rotation.x = Math.PI / 2;
+      vehiclePart(mScooter, new THREE.BoxGeometry(0.06, 0.18, 0.16), white, 0.59, 0.76, 0); // Headlight
+      vehiclePart(mScooter, new THREE.BoxGeometry(0.04, 0.15, 0.24), glass, 0.49, 1.03, 0).rotation.z = 0.35; // Dark windscreen visor
+      vehiclePart(mScooter, new THREE.BoxGeometry(0.05, 0.10, 0.16), red, -0.75, 0.56, 0); // Taillight
+      vehiclePart(mScooter, new THREE.BoxGeometry(0.02, 0.12, 0.22), plate, -0.76, 0.44, 0); // Rear plate
+      vehiclePart(mScooter, new THREE.CylinderGeometry(0.045, 0.055, 0.56, 8), rim, -0.35, 0.30, 0.18).rotation.z = Math.PI / 2 - 0.14; // Exhaust
+      vehiclePart(mScooter, new THREE.CylinderGeometry(0.022, 0.022, 0.64, 8), rubber, 0.44, 0.99, 0).rotation.x = Math.PI / 2; // Handlebar
+      for (const side of [-1, 1]) {
+        vehiclePart(mScooter, new THREE.CylinderGeometry(0.02, 0.02, 0.44, 6), rim, 0.44, 0.46, side * 0.09).rotation.z = 0.18; // Front fork
+        vehiclePart(mScooter, new THREE.CylinderGeometry(0.01, 0.01, 0.16, 6), rubber, 0.44, 1.06, side * 0.24); // Mirror stem
+        vehiclePart(mScooter, new THREE.CylinderGeometry(0.05, 0.05, 0.03, 10), rubber, 0.44, 1.14, side * 0.28).rotation.z = Math.PI / 2; // Round mirrors
+        const arm = vehiclePart(mScooter, new THREE.CylinderGeometry(0.045, 0.055, 0.52, 8), riderJacketMat, 0.14, 1.14, side * 0.23);
+        arm.rotation.z = 1.15;
+        const leg = vehiclePart(mScooter, new THREE.CylinderGeometry(0.065, 0.055, 0.48, 8), rubber, 0.02, 0.64, side * 0.14);
+        leg.rotation.z = -0.35;
+      }
+      const torso = vehiclePart(mScooter, new THREE.BoxGeometry(0.24, 0.52, 0.36), riderJacketMat, -0.16, 1.12, 0, true);
+      torso.rotation.z = -0.18;
+      // Delivery thermal box on every 2nd scooter, commuter backpack on others
+      if (index % 2 === 0) {
+        vehiclePart(mScooter, new THREE.BoxGeometry(0.36, 0.38, 0.38), deliveryBoxMat, -0.50, 0.96, 0, true);
+      } else {
+        vehiclePart(mScooter, new THREE.BoxGeometry(0.16, 0.36, 0.28), backpackMat, -0.32, 1.14, 0, true).rotation.z = -0.18;
+      }
+      vehiclePart(mScooter, new THREE.SphereGeometry(0.155, 12, 12), helmetMat, -0.08, 1.48, 0, true);
+      vehiclePart(mScooter, new THREE.BoxGeometry(0.10, 0.08, 0.22), glass, 0.03, 1.47, 0); // Dark helmet visor
+      mScooter.position.set(-80 + index * 37 + direction * 45, 0.06, z + direction * 5.2);
+      mScooter.rotation.y = direction === 1 ? 0 : Math.PI;
+      cityGroup.add(mScooter);
+      roadVehicles.push({ car: mScooter, direction, speed: 9.2 + (index % 3) });
+      movingColliders.push({ object: mScooter, w: 1.5, h: 1.7, d: 0.7, label: '行駛機車' });
     }
+  }
+
+  // Instanced Curbside Parked Cars along Outer Ring (-122 / 122) & E-W Arterials (-24 / -110)
+  const parkedSpots = [];
+  for (const ax of [-122, 122]) {
+    for (const z of [-206, -186, -166, -146, -86, -66, -46, -4]) {
+      parkedSpots.push({ x: ax - 5.4, z, rotY: -Math.PI / 2 });
+      parkedSpots.push({ x: ax + 5.4, z: z + 4.5, rotY: Math.PI / 2 });
+    }
+  }
+  for (const sz of [-24, -110]) {
+    for (const x of [-104, -84, -54, -34, 34, 54, 84, 104]) {
+      if (sz === -110 && Math.abs(x) < 28) continue;
+      parkedSpots.push({ x, z: sz - 6.0, rotY: 0 });
+      parkedSpots.push({ x: x + 4.5, z: sz + 6.0, rotY: Math.PI });
+    }
+  }
+  if (parkedSpots.length > 0) {
+    const sedan = models[0];
+    const sedanType = types[0];
+    const carPaintMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.28, metalness: 0.48 });
+    const pShells = new THREE.InstancedMesh(sedan.shell, carPaintMat, parkedSpots.length);
+    const pGlass = new THREE.InstancedMesh(sedan.glazing, glass, parkedSpots.length);
+    const pBumpers = new THREE.InstancedMesh(sedan.bumper, rubber, parkedSpots.length * 2);
+    const pHeadlamps = new THREE.InstancedMesh(sedan.lamp, white, parkedSpots.length * 2);
+    const pTaillamps = new THREE.InstancedMesh(sedan.lamp, red, parkedSpots.length * 2);
+    const pMirrors = new THREE.InstancedMesh(sedan.mirror, carPaintMat, parkedSpots.length * 2);
+    const pWheels = new THREE.InstancedMesh(sedan.tire, rubber, parkedSpots.length * 4);
+    const pRims = new THREE.InstancedMesh(sedan.hub, rim, parkedSpots.length * 4);
+    const carColors = [0xd4d4d8, 0x334155, 0x1e293b, 0x9ca3af, 0x1e3a5f, 0x6b2c2c]
+      .map(hex => new THREE.Color(hex).convertSRGBToLinear());
+    const pt = new THREE.Object3D();
+    const wMat = new THREE.Matrix4();
+    const wRot = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+
+    const setParkedPart = (mesh, idx, ps, lx, ly, lz, rotMatrix = null) => {
+      const c = Math.cos(ps.rotY), s = Math.sin(ps.rotY);
+      pt.position.set(ps.x + lx * c + lz * s, 0.06 + ly, ps.z - lx * s + lz * c);
+      pt.rotation.set(0, ps.rotY, 0);
+      pt.scale.set(1, 1, 1);
+      pt.updateMatrix();
+      if (rotMatrix) {
+        wMat.copy(pt.matrix).multiply(rotMatrix);
+        mesh.setMatrixAt(idx, wMat);
+      } else {
+        mesh.setMatrixAt(idx, pt.matrix);
+      }
+    };
+
+    parkedSpots.forEach((ps, i) => {
+      const carCol = carColors[i % carColors.length];
+      setParkedPart(pShells, i, ps, 0, 0, 0);
+      pShells.setColorAt(i, carCol);
+      setParkedPart(pGlass, i, ps, 0, 0, 0);
+      setParkedPart(pBumpers, i * 2, ps, sedanType.length / 2 - 0.03, sedanType.lightY - 0.23, 0);
+      setParkedPart(pBumpers, i * 2 + 1, ps, -sedanType.length / 2 + 0.03, sedanType.lightY - 0.23, 0);
+
+      let wi = 0;
+      let si = 0;
+      for (const side of [-1, 1]) {
+        setParkedPart(pHeadlamps, i * 2 + si, ps, sedanType.length / 2 - 0.06, sedanType.lightY, side * sedanType.width * 0.33);
+        setParkedPart(pTaillamps, i * 2 + si, ps, -sedanType.length / 2 + 0.02, sedanType.lightY, side * sedanType.width * 0.33);
+        setParkedPart(pMirrors, i * 2 + si, ps, 0.80, 1.25, side * (sedanType.width / 2 + 0.06));
+        pMirrors.setColorAt(i * 2 + si, carCol);
+        si++;
+        for (const ax of [-sedanType.axle, sedanType.axle]) {
+          const wzOff = side * (sedanType.width / 2 - 0.14);
+          setParkedPart(pWheels, i * 4 + wi, ps, ax, sedanType.wheel, wzOff, wRot);
+          setParkedPart(pRims, i * 4 + wi, ps, ax, sedanType.wheel, side * (sedanType.width / 2 - 0.067 + sedanType.wheel * 0.32), wRot);
+          wi++;
+        }
+      }
+      registerBoxCollider(ps.x, 0.85, ps.z,
+        Math.abs(Math.cos(ps.rotY)) > 0.5 ? sedanType.length : sedanType.width,
+        1.6,
+        Math.abs(Math.cos(ps.rotY)) > 0.5 ? sedanType.width : sedanType.length,
+        '路邊停放車輛', '#64748b', false);
+    });
+    if (pShells.instanceColor) pShells.instanceColor.needsUpdate = true;
+    if (pMirrors.instanceColor) pMirrors.instanceColor.needsUpdate = true;
+    [pShells, pGlass, pBumpers, pHeadlamps, pTaillamps, pMirrors, pWheels, pRims].forEach((m) => {
+      m.castShadow = m.receiveShadow = true;
+      m.frustumCulled = false;
+      cityGroup.add(m);
+    });
   }
 }
 
@@ -985,10 +1487,10 @@ function registerBoxCollider(x, yCenter, z, w, h, d, label = '障礙物', color 
 }
 
 const CITY = {
-  minX: -180, maxX: 180, minZ: -280, maxZ: 52,
-  avenues: [-144, -72, 0, 72, 144],
-  streets: [-248, -184, -120, -28, 20],
-  avenueWidth: 14, streetWidth: 16
+  minX: -136, maxX: 136, minZ: -236, maxZ: 42,
+  avenues: [-122, 0, 122],
+  streets: [-224, -110, -24, 24],
+  avenueWidth: 14, streetWidth: 15
 };
 const cityMapAreas = [];
 const cityLandmarks = [];
@@ -1001,7 +1503,7 @@ function buildCityBackdrop() {
   cityGroup.add(backdrop);
 
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(halfWidth * 2, southEdge - northEdge),
-    new THREE.MeshLambertMaterial({ color: new THREE.Color(0x383e44).convertSRGBToLinear() }));
+    new THREE.MeshLambertMaterial({ color: new THREE.Color(0x2e3237).convertSRGBToLinear() }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(0, -.04, centerZ);
   backdrop.add(ground);
@@ -1011,7 +1513,7 @@ function buildCityBackdrop() {
   const north = [northEdge, CITY.minZ];
   const south = [CITY.maxZ, southEdge];
   const xs = [...west, ...CITY.avenues, ...east];
-  const zs = [...north, ...CITY.streets, RAILWAY_Z, ...south].sort((a, b) => a - b);
+  const zs = [...north, ...CITY.streets, ...south].sort((a, b) => a - b);
 
   function road(x1, z1, x2, z2, width) {
     outerMapRoads.push([x1, z1, x2, z2, width]);
@@ -1030,7 +1532,7 @@ function buildCityBackdrop() {
     }
   }
   for (const z of zs) {
-    if (z === RAILWAY_Z || z === CITY.minZ || z === CITY.maxZ || z === northEdge || z === southEdge) continue;
+    if (z === CITY.minZ || z === CITY.maxZ || z === northEdge || z === southEdge) continue;
     road(-halfWidth, z, CITY.minX, z, CITY.streetWidth);
     road(CITY.maxX, z, halfWidth, z, CITY.streetWidth);
   }
@@ -1053,7 +1555,7 @@ function buildCityBackdrop() {
 
   for (const x of xs.slice(1, -1)) {
     for (const z of zs.slice(1, -1)) {
-      if (z === RAILWAY_Z || z === CITY.minZ || z === CITY.maxZ) continue;
+      if (z === CITY.minZ || z === CITY.maxZ) continue;
       if (x > CITY.minX && x < CITY.maxX && z > CITY.minZ && z < CITY.maxZ) continue;
       signalIntersections.push([x, z]);
     }
@@ -1072,32 +1574,36 @@ function buildCityBackdrop() {
       const x = (xs[col] + xs[col + 1]) / 2;
       const z = (zs[row] + zs[row + 1]) / 2;
       if (x > CITY.minX && x < CITY.maxX && z > CITY.minZ && z < CITY.maxZ) continue;
-      const lotWidth = xs[col + 1] - xs[col] - 25;
-      const lotDepth = zs[row + 1] - zs[row] - 20;
-      if (lotDepth < 8 || random() < .10) continue;
+      const isOuterX = xs[col] === -halfWidth || xs[col + 1] === halfWidth;
+      const isOuterZ = zs[row] === northEdge || zs[row + 1] === southEdge;
+      const lotWidth = xs[col + 1] - xs[col] - (isOuterX ? 2.5 : 22);
+      const lotDepth = zs[row + 1] - zs[row] - (isOuterZ ? 2.5 : 18);
+      if (lotWidth < 5 || lotDepth < 5) continue;
       const shiftedX = x;
-      const green = (row + col) % 5 === 0;
+      const green = !isOuterX && !isOuterZ && ((row + col) % 8 === 0);
       outerMapCourtyards.push([shiftedX, z, lotWidth, lotDepth, green]);
       if (green) continue;
       const edgeDistance = Math.max(CITY.minX - x, x - CITY.maxX, CITY.minZ - z, z - CITY.maxZ);
-      const tall = random() < .20 && lotDepth > 26 && edgeDistance > 70;
-      for (const side of [-1, 1]) {
+      const tall = random() < .56 && lotDepth > 10;
+      const count = (isOuterX || isOuterZ) ? 1 : 2;
+      for (let si = 0; si < count; si++) {
+        const side = count === 1 ? 0 : (si === 0 ? -1 : 1);
         const bx = shiftedX + side * lotWidth * .23;
-        const bz = z + (random() - .5) * lotDepth * .18;
-        const w = lotWidth * (.28 + random() * .13);
-        const d = lotDepth * (.50 + random() * .26);
-        const h = tall ? 33 + random() * 42 : 6 + random() * 22;
+        const bz = z + (random() - .5) * lotDepth * .14;
+        const w = count === 1 ? lotWidth * (.76 + random() * .16) : lotWidth * (.32 + random() * .13);
+        const d = count === 1 ? lotDepth * (.76 + random() * .16) : lotDepth * (.58 + random() * .24);
+        const h = tall ? 34 + random() * 46 : 16 + random() * 22;
         const color = palette[Math.floor(random() * palette.length)];
-        const profile = (row + col * 2 + (side > 0 ? 1 : 0)) % 4;
+        const profile = (row + col * 2 + si) % 4;
         if (profile === 0 || tall) {
           const podium = h * .30;
           buildings.push([bx, podium / 2, bz, w, podium, d, color]);
-          buildings.push([bx - w * .09, (h + podium) / 2, bz, w * .72, h - podium, d * .73, color]);
+          buildings.push([bx - w * .07, (h + podium) / 2, bz, w * .74, h - podium, d * .74, color]);
         } else if (profile === 1) {
           buildings.push([bx, h * .33, bz, w, h * .66, d, color]);
-          buildings.push([bx + w * .19, h * .50, bz, w * .60, h, d * .78, color]);
+          buildings.push([bx + w * .16, h * .50, bz, w * .62, h, d * .78, color]);
         } else {
-          const slabHeight = profile === 2 ? h * .62 : h;
+          const slabHeight = profile === 2 ? h * .64 : h;
           buildings.push([bx, slabHeight / 2, bz, w, slabHeight, d, color]);
         }
       }
@@ -1225,45 +1731,127 @@ function* buildCity() {
   group.name = '台灣城市';
   const cube = new THREE.BoxGeometry(1, 1, 1);
   const colors = {
-    base: 0x796d5e, asphalt: 0x353c45, sidewalk: 0x9c917d, white: 0xe9e6db,
-    yellow: 0xd8aa53, lawn: 0x527743, paving: 0x977357, court: 0x417c77,
-    glass: 0x506370, metalRoof: 0x657078, trim: 0x52616c, concrete: 0x988b78,
-    wood: 0x715342, leaves: 0x547d49,
-    slateRoof: 0x505459, tealRoof: 0x5c6166, copperRoof: 0x666a6e,
-    tileRoof: 0x55595d, greenRoof: 0x525c55, sandRoof: 0x6e7175,
-    puTrack: 0x993d31, tinGreen: 0x3d4d42, tinBlue: 0x45515e,
-    courtGreen: 0x276749, courtBlue: 0x1e3a8a, tankSteel: 0xc8d1d9, rimOrange: 0xe65100
+    base: 0x45433f, asphalt: 0x2c3035, sidewalk: 0x7b746c, white: 0xd0cec6,
+    yellow: 0xb88b3d, lawn: 0x3b5333, paving: 0x7c6556, court: 0x34625e,
+    glass: 0x2e414d, metalRoof: 0x525a60, trim: 0x48525a, concrete: 0x7c766e,
+    wood: 0x594235, leaves: 0x385432,
+    slateRoof: 0x42464a, tealRoof: 0x4a5055, copperRoof: 0x52565a,
+    tileRoof: 0x474b4f, greenRoof: 0x444c47, sandRoof: 0x5b5e62,
+    puTrack: 0x7c362c, tinGreen: 0x324036, tinBlue: 0x394450,
+    courtGreen: 0x244c3a, courtBlue: 0x1d3464, tankSteel: 0xb6bfc7, rimOrange: 0xc2480e
   };
   const materials = Object.fromEntries(Object.entries(colors).map(([key, color]) =>
     [key, new THREE.MeshStandardMaterial({ color: new THREE.Color(color).convertSRGBToLinear(), roughness: 0.88 })]));
   applyTreeWindShader(materials.leaves, true);
   function surfaceMaterial(asphalt) {
+    const size = 512;
     const tile = document.createElement('canvas');
-    tile.width = tile.height = 256;
+    tile.width = tile.height = size;
     const ctx = tile.getContext('2d');
-    ctx.fillStyle = asphalt ? '#45464a' : '#a79b86';
-    ctx.fillRect(0, 0, 256, 256);
-    let seed = 2304;
+    const rCanvas = document.createElement('canvas');
+    rCanvas.width = rCanvas.height = size;
+    const rCtx = rCanvas.getContext('2d');
+
+    let seed = asphalt ? 2304 : 4096;
     const sample = () => {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
       return seed / 4294967296;
     };
-    for (let i = 0; i < 5700; i++) {
-      ctx.fillStyle = sample() > .51 ? '#fff2da26' : '#171b2536';
-      ctx.fillRect(sample() * 256, sample() * 256, 1 + sample() * 2, 1 + sample() * 2);
-    }
-    if (!asphalt) {
-      ctx.strokeStyle = '#6a625b80';
-      for (let i = 0; i < 256; i += 32) {
-        ctx.strokeRect(i, 0, 32, 256);
-        ctx.strokeRect(0, i, 256, 32);
+
+    if (asphalt) {
+      // Realistic weathered Taiwanese urban asphalt
+      ctx.fillStyle = '#3a3d42';
+      ctx.fillRect(0, 0, size, size);
+      rCtx.fillStyle = '#e6e6e6'; // ~0.90 roughness
+      rCtx.fillRect(0, 0, size, size);
+
+      // Asphalt repair patches (柏油路面施工修補色塊與瀝青封縫)
+      for (let p = 0; p < 5; p++) {
+        const px = sample() * (size - 120);
+        const py = sample() * (size - 120);
+        const pw = 45 + sample() * 95;
+        const ph = 30 + sample() * 80;
+        ctx.fillStyle = p % 2 === 0 ? '#2b2d31' : '#33363b';
+        ctx.fillRect(px, py, pw, ph);
+        ctx.strokeStyle = '#1b1d20';
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(px, py, pw, ph);
+        rCtx.fillStyle = '#c4c4c4'; // slightly smoother patched tar
+        rCtx.fillRect(px, py, pw, ph);
+      }
+
+      // Multi-scale mineral aggregate grain
+      for (let i = 0; i < 16000; i++) {
+        const x = sample() * size;
+        const y = sample() * size;
+        const s = 1 + sample() * 1.8;
+        ctx.fillStyle = sample() > 0.52 ? 'rgba(225, 220, 210, 0.14)' : 'rgba(18, 20, 26, 0.24)';
+        ctx.fillRect(x, y, s, s);
+      }
+
+      // Subtle tire wear & oil grime streaks
+      for (let i = 0; i < 18; i++) {
+        const gx = sample() * size;
+        const gy = sample() * size;
+        const gr = 14 + sample() * 28;
+        const grad = ctx.createRadialGradient(gx, gy, 2, gx, gy, gr);
+        grad.addColorStop(0, 'rgba(18, 20, 24, 0.16)');
+        grad.addColorStop(1, 'rgba(18, 20, 24, 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(gx - gr, gy - gr, gr * 2, gr * 2);
+      }
+    } else {
+      // Authentic Taiwanese interlocking terracotta/concrete sidewalk bricks (紅磚人行道)
+      ctx.fillStyle = '#8b7365';
+      ctx.fillRect(0, 0, size, size);
+      rCtx.fillStyle = '#ececec';
+      rCtx.fillRect(0, 0, size, size);
+
+      const brickW = 32;
+      const brickH = 16;
+      const brickPalette = ['#9c7563', '#8f6b5a', '#a47e6b', '#876758', '#967261', '#7d7771'];
+      for (let row = 0; row < size / brickH; row++) {
+        const offset = (row % 2) * (brickW / 2);
+        for (let col = -1; col < size / brickW + 1; col++) {
+          const bx = col * brickW + offset;
+          const by = row * brickH;
+          ctx.fillStyle = brickPalette[Math.floor(sample() * brickPalette.length)];
+          ctx.fillRect(bx + 1, by + 1, brickW - 2, brickH - 2);
+        }
+      }
+      // Fine surface weathering & mortar grime
+      for (let i = 0; i < 7000; i++) {
+        ctx.fillStyle = sample() > 0.5 ? 'rgba(255,245,230,0.08)' : 'rgba(25,22,20,0.16)';
+        ctx.fillRect(sample() * size, sample() * size, 1.5, 1.5);
+      }
+      // Subtle damp moss/stain patches
+      for (let i = 0; i < 10; i++) {
+        const mx = sample() * size;
+        const my = sample() * size;
+        const mr = 18 + sample() * 34;
+        const grad = ctx.createRadialGradient(mx, my, 2, mx, my, mr);
+        grad.addColorStop(0, 'rgba(38, 44, 34, 0.18)');
+        grad.addColorStop(1, 'rgba(38, 44, 34, 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(mx - mr, my - mr, mr * 2, mr * 2);
       }
     }
+
     const texture = new THREE.CanvasTexture(tile);
     texture.encoding = THREE.sRGBEncoding;
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
     texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-    return new THREE.MeshStandardMaterial({ map: texture, roughness: .96 });
+
+    const rTex = new THREE.CanvasTexture(rCanvas);
+    rTex.wrapS = rTex.wrapT = THREE.RepeatWrapping;
+
+    return new THREE.MeshStandardMaterial({
+      map: texture,
+      roughnessMap: rTex,
+      bumpMap: texture,
+      bumpScale: asphalt ? 0.045 : 0.065,
+      roughness: asphalt ? 0.94 : 0.92
+    });
   }
   const roadSurface = surfaceMaterial(true);
   const walkSurface = surfaceMaterial(false);
@@ -1289,45 +1877,106 @@ function* buildCity() {
   const cityDepth = CITY.maxZ - CITY.minZ;
   const centerZ = (CITY.minZ + CITY.maxZ) / 2;
   block('base', 0, -.28, centerZ, cityWidth, .55, cityDepth);
-  for (const x of CITY.avenues) {
-    surface(roadSurface, x, .045, centerZ, CITY.avenueWidth, cityDepth, 4);
-    for (const side of [-1, 1]) {
-      block('white', x + side * 6.5, .056, centerZ, .14, .012, cityDepth);
-    }
-    for (let z = CITY.minZ + 6; z < CITY.maxZ; z += 8) {
-      if (CITY.streets.some(street => Math.abs(z - street) < 13) || Math.abs(z - RAILWAY_Z) < 9) continue;
-      if (x === 0 && Math.abs(z) < 13) continue;
-      block('yellow', x, .06, z, .17, .012, 3.2);
-    }
+  block('sidewalk', 0, .01, centerZ, cityWidth, .04, cityDepth);
+  surface(walkSurface, 0, .035, centerZ, cityWidth, cityDepth, 5.2);
+
+  // Brand-New Radial + Roundabout + Diagonal + Outer Ring Road Masterplan (全新放射圓環＋斜向大道＋外環道城市路網)
+  const NEW_ROAD_SEGMENTS = [
+    [0, -24, 0, -110, 16],        // 中央林蔭大道 (South -> Central Roundabout)
+    [0, -110, 0, -224, 14],       // 北側市政大道 (Central Roundabout -> North Ring)
+    [0, -110, 122, -110, 15],     // 東側商業大道
+    [0, -110, -122, -110, 15],    // 西側老街大道
+    [0, -110, 122, -224, 14],     // 東北金融斜向大道
+    [0, -110, -122, -224, 14],    // 西北文教斜向大道
+    [0, -24, 122, -110, 12],      // 東南斜向商街
+    [0, -24, -122, -110, 12],     // 西南騎樓老街
+    [-124, -224, 124, -224, 14],  // 北外環道
+    [-124, 24, 124, 24, 14],      // 南外環道
+    [-122, -226, -122, 26, 14],   // 西外環道
+    [122, -226, 122, 26, 14],     // 東外環道
+    [-122, -24, 122, -24, 14]     // 中南橫向聯絡道
+  ];
+
+  function pointToSegDist(px, pz, x1, z1, x2, z2) {
+    const vx = x2 - x1, vz = z2 - z1;
+    const lenSq = vx * vx + vz * vz;
+    if (lenSq < 1e-6) return Math.hypot(px - x1, pz - z1);
+    const t = Math.max(0, Math.min(1, ((px - x1) * vx + (pz - z1) * vz) / lenSq));
+    return Math.hypot(px - (x1 + t * vx), pz - (z1 + t * vz));
   }
-  for (const z of CITY.streets) {
-    surface(roadSurface, 0, .055, z, cityWidth, CITY.streetWidth, 4);
-    for (let x = CITY.minX + 5; x < CITY.maxX; x += 8) {
-      if (CITY.avenues.some(avenue => Math.abs(x - avenue) < 12)) continue;
-      block('yellow', x, .064, z, 3.2, .012, .17);
+
+  function isClearOfRoads(cx, cz, radius) {
+    if (Math.hypot(cx - 0, cz - (-110)) < 26.5 + radius) return false; // Central Roundabout
+    if (Math.hypot(cx - 0, cz - 0) < 16.5 + radius) return false;       // Helipad Plaza
+    for (const [x1, z1, x2, z2, rw] of NEW_ROAD_SEGMENTS) {
+      if (pointToSegDist(cx, cz, x1, z1, x2, z2) < rw * 0.5 + radius) return false;
     }
-    for (const x of CITY.avenues) {
-      for (let stripe = -3; stripe <= 3; stripe++) {
-        for (const side of [-1, 1]) {
-          block('white', x + stripe * 1.6, .065, z + side * 10, .67, .012, 2.2);
-          block('white', x + side * 9, .065, z + stripe * 1.6, 2.2, .012, .67);
-        }
-      }
-    }
+    return true;
   }
-  const manhole = new THREE.CylinderGeometry(.47, .47, .018, 18);
-  for (const z of CITY.streets) {
-    for (const x of [-116, -45, 28, 108]) {
-      block('asphalt', x, .062, z + 2.6, 3.2, .014, 1.55);
-      const cover = new THREE.Mesh(manhole, materials.trim);
-      cover.position.set(x + .62, .079, z + 2.6);
-      cover.receiveShadow = true;
-      group.add(cover);
-      for (const offset of [-.2, 0, .2]) {
-        block('asphalt', x + .62, .09, z + 2.6 + offset, .63, .012, .035);
-      }
+
+  // Render every road segment with asphalt surface, yellow double centerline, and white edge markings
+  NEW_ROAD_SEGMENTS.forEach(([x1, z1, x2, z2, rw], segIdx) => {
+    const dx = x2 - x1, dz = z2 - z1;
+    const len = Math.hypot(dx, dz);
+    const ang = Math.atan2(dx, dz);
+    const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
+
+    const rGeo = new THREE.PlaneGeometry(rw, len);
+    const rUv = rGeo.attributes.uv;
+    for (let i = 0; i < rUv.count; i++) {
+      rUv.setXY(i, rUv.getX(i) * rw / 6, rUv.getY(i) * len / 6);
     }
-  }
+    const rMesh = new THREE.Mesh(rGeo, roadSurface);
+    rMesh.rotation.order = 'YXZ';
+    rMesh.rotation.y = ang;
+    rMesh.rotation.x = -Math.PI / 2;
+    rMesh.position.set(mx, 0.055 + segIdx * 0.0005, mz);
+    rMesh.receiveShadow = true;
+    group.add(rMesh);
+
+    // Double yellow centerline + white lane edge stripes
+    const lineGrp = new THREE.Group();
+    lineGrp.position.set(mx, 0.068 + segIdx * 0.0005, mz);
+    lineGrp.rotation.y = ang;
+    for (const yOff of [-0.16, 0.16]) {
+      const yLine = new THREE.Mesh(new THREE.PlaneGeometry(0.12, Math.max(4, len - 14)), materials.yellow);
+      yLine.rotation.x = -Math.PI / 2;
+      yLine.position.x = yOff;
+      lineGrp.add(yLine);
+    }
+    for (const eSide of [-1, 1]) {
+      const eLine = new THREE.Mesh(new THREE.PlaneGeometry(0.14, Math.max(4, len - 10)), materials.white);
+      eLine.rotation.x = -Math.PI / 2;
+      eLine.position.x = eSide * (rw * 0.46);
+      lineGrp.add(eLine);
+    }
+    group.add(lineGrp);
+    outerMapRoads.push([x1, z1, x2, z2, rw]);
+  });
+
+  // Grand Central Landscaped Roundabout at (0, -110) (市中心景觀大圓環)
+  const rbX = 0, rbZ = -110;
+  const rbRoad = new THREE.Mesh(new THREE.CylinderGeometry(24.5, 24.5, 0.14, 40), roadSurface);
+  rbRoad.position.set(rbX, 0.015, rbZ);
+  rbRoad.receiveShadow = true;
+  group.add(rbRoad);
+  const rbRing = new THREE.Mesh(new THREE.RingGeometry(17.2, 17.6, 40), materials.yellow);
+  rbRing.rotation.x = -Math.PI / 2;
+  rbRing.position.set(rbX, 0.095, rbZ);
+  group.add(rbRing);
+  const rbCurb = new THREE.Mesh(new THREE.CylinderGeometry(11.6, 11.9, 0.38, 36), materials.concrete);
+  rbCurb.position.set(rbX, 0.19, rbZ);
+  rbCurb.receiveShadow = true;
+  group.add(rbCurb);
+  const rbLawn = new THREE.Mesh(new THREE.CylinderGeometry(10.8, 10.8, 0.40, 36), materials.lawn);
+  rbLawn.position.set(rbX, 0.21, rbZ);
+  rbLawn.receiveShadow = true;
+  group.add(rbLawn);
+  block('concrete', rbX, 1.2, rbZ, 4.2, 2.0, 4.2);
+  block('trim', rbX, 5.4, rbZ, 1.6, 6.8, 1.6);
+  block('white', rbX, 9.2, rbZ, 1.1, 1.1, 1.1);
+  registerBoxCollider(rbX, 4.6, rbZ, 4.4, 9.2, 4.4, '市中心圓環紀念碑', '#94a3b8', false);
+  cityLandmarks.push({ name: '市中心圓環', x: rbX, z: rbZ });
   const signalColors = [0xf04436, 0xffc544, 0x40e38b];
   const lampMaterials = [0, 1].map(axis => signalColors.map((color, index) => {
     const material = new THREE.MeshStandardMaterial({ color: 0x1e2528, emissive: color });
@@ -1372,88 +2021,180 @@ function* buildCity() {
   function facade(kind, floors, variant) {
     const key = kind + floors + '-' + variant;
     if (facadeMaterials.has(key)) return facadeMaterials.get(key);
+    const cw = 256;
+    const floorH = 32;
+    const ch = Math.max(32, floors * floorH);
     const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = floors * 24;
+    canvas.width = cw;
+    canvas.height = ch;
     const ctx = canvas.getContext('2d');
     const office = kind === 'office';
     const bays = office && variant === 2 ? 4 : kind === 'housing' && variant === 1 ? 5 : 6;
-    const bayWidth = 128 / bays;
+    const bayWidth = cw / bays;
 
-    // Taiwanese wall base color (米白丁掛磚、灰白磁磚、淺駝色二丁掛)
-    const twTileColors = ['#d8d3c8', '#ccc7bb', '#bebbb1'];
-    const officeColors = ['#5a656d', '#6f7875', '#7a6f65'];
-    ctx.fillStyle = office ? officeColors[variant % 3] : twTileColors[variant % 3];
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    let fSeed = 701 + floors * 37 + variant * 113;
+    const fRand = () => {
+      fSeed = (Math.imul(1664525, fSeed) + 1013904223) >>> 0;
+      return fSeed / 4294967296;
+    };
 
-    // Taiwanese ceramic tile joint lines (丁掛磚細勾縫)
+    // Taiwanese weathered ceramic tile & 5 distinct commercial office palettes
+    const twTileColors = ['#cfc8ba', '#c2bcb0', '#a8715d', '#aeb5a8'];
+    const officeColors = ['#344656', '#948b7e', '#262b30', '#4f4339', '#b8b0a2'];
+    ctx.fillStyle = office ? officeColors[variant % 5] : twTileColors[variant % 4];
+    ctx.fillRect(0, 0, cw, ch);
+
     if (!office) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
-      for (let ty = 0; ty < canvas.height; ty += 4) {
-        ctx.fillRect(0, ty, canvas.width, 1);
+      // Subtle per-tile tonal variation (二丁掛磁磚深淺色差)
+      for (let ty = 0; ty < ch; ty += 4) {
+        for (let tx = 0; tx < cw; tx += 12) {
+          if (fRand() > 0.65) {
+            ctx.fillStyle = fRand() > 0.5 ? 'rgba(255,250,240,0.08)' : 'rgba(30,25,20,0.08)';
+            ctx.fillRect(tx, ty, 11, 3);
+          }
+        }
+      }
+      // Horizontal & vertical ceramic tile grout lines
+      ctx.fillStyle = 'rgba(28, 25, 22, 0.13)';
+      for (let ty = 0; ty < ch; ty += 4) {
+        ctx.fillRect(0, ty, cw, 1);
+      }
+      ctx.fillStyle = 'rgba(28, 25, 22, 0.06)';
+      for (let tx = 0; tx < cw; tx += 12) {
+        ctx.fillRect(tx, 0, 1, ch);
+      }
+
+      // Top parapet rain-streak weathering (頂樓女兒牆滲水黑斑)
+      const topGrime = ctx.createLinearGradient(0, 0, 0, 26);
+      topGrime.addColorStop(0, 'rgba(28, 26, 24, 0.34)');
+      topGrime.addColorStop(1, 'rgba(28, 26, 24, 0)');
+      ctx.fillStyle = topGrime;
+      ctx.fillRect(0, 0, cw, 26);
+
+      for (let s = 0; s < 14; s++) {
+        const sx = fRand() * cw;
+        const sy = fRand() * ch * 0.65;
+        const sh = 18 + fRand() * 42;
+        const sg = ctx.createLinearGradient(0, sy, 0, sy + sh);
+        sg.addColorStop(0, 'rgba(24, 22, 20, 0.18)');
+        sg.addColorStop(1, 'rgba(24, 22, 20, 0)');
+        ctx.fillStyle = sg;
+        ctx.fillRect(sx, sy, 3 + fRand() * 6, sh);
       }
     }
 
     for (let floor = 0; floor < floors; floor++) {
-      const y = floor * 24;
-      ctx.fillStyle = office ? '#354b59' : '#88847b';
-      ctx.fillRect(0, y + 21, 128, office ? 3 : 2);
+      const y = floor * floorH;
+      // Floor slab / spandrel shadow line
+      ctx.fillStyle = office ? '#253440' : '#7b766d';
+      ctx.fillRect(0, y + floorH - 3, cw, office ? 3 : 2);
 
-      // Ground floor (floor 0): Taiwanese roll-up metal shutter or glass shop
-      if (!office && floor === 0) {
-        ctx.fillStyle = '#475569'; // Roll-up steel shutter (鐵捲門)
-        ctx.fillRect(4, y + 2, 120, 18);
-        ctx.fillStyle = '#64748b';
-        for (let sy = y + 4; sy < y + 20; sy += 3) {
-          ctx.fillRect(4, sy, 120, 1);
+      // Ground floor (bottom of canvas, floor === floors - 1): Taiwanese roll-up shutter & shopfront
+      if (!office && floor === floors - 1) {
+        ctx.fillStyle = '#334155';
+        ctx.fillRect(0, y, cw, floorH);
+        for (let bay = 0; bay < bays; bay++) {
+          const bx = bay * bayWidth + 3;
+          const bw = bayWidth - 6;
+          if ((bay + variant) % 3 === 0) {
+            // Warm lit convenience / shop glass bay
+            ctx.fillStyle = '#fef3c7';
+            ctx.fillRect(bx, y + 4, bw, floorH - 5);
+            ctx.fillStyle = 'rgba(30, 41, 59, 0.35)';
+            ctx.fillRect(bx, y + 4, bw, 4);
+          } else {
+            // Roll-up steel shutter (鐵捲門)
+            ctx.fillStyle = '#475569';
+            ctx.fillRect(bx, y + 4, bw, floorH - 5);
+            ctx.fillStyle = '#64748b';
+            for (let sy = y + 6; sy < y + floorH - 2; sy += 3) {
+              ctx.fillRect(bx, sy, bw, 1);
+            }
+          }
         }
         continue;
       }
 
       for (let bay = 0; bay < bays; bay++) {
-        const inset = office ? 2 : 4;
+        const inset = office ? 3 : 7;
         const x = inset + bay * bayWidth;
         const width = bayWidth - inset * 2;
+        const winY = y + 5;
+        const winH = office ? 22 : 19;
 
-        ctx.fillStyle = '#1e293b';
-        ctx.fillRect(x - 1, y + 3, width + 2, 16);
-        ctx.fillStyle = office ? ['#3b82f6', '#0ea5e9', '#64748b'][variant % 3] : '#475569';
-        ctx.fillRect(x, y + 4, width, 14);
+        // Deep baked window recess AO shadow
+        ctx.fillStyle = '#141c24';
+        ctx.fillRect(x - 2, winY - 1, width + 4, winH + 2);
 
-        ctx.fillStyle = (floor + bay) % 3 === 0 ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.18)';
-        ctx.fillRect(x + 1, y + 5, width - 2, 4);
+        // Glass pane
+        if (office) {
+          const gGrad = ctx.createLinearGradient(0, winY, 0, winY + winH);
+          gGrad.addColorStop(0, ['#386685', '#2a4654', '#374151', '#785a40', '#2d4b5a'][variant % 5]);
+          gGrad.addColorStop(1, '#14202b');
+          ctx.fillStyle = gGrad;
+          ctx.fillRect(x, winY, width, winH);
+          // Subtle interior venetian blind / ceiling light hint
+          if ((floor * 5 + bay) % 4 === 0) {
+            ctx.fillStyle = 'rgba(254, 243, 199, 0.22)';
+            ctx.fillRect(x + 1, winY + 2, width - 2, 7);
+          }
+          // Crisp aluminum mullion highlight
+          ctx.fillStyle = 'rgba(203, 213, 225, 0.32)';
+          ctx.fillRect(x, winY, width, 1.5);
+        } else {
+          // Residential window with dark interior & subtle sky reflection
+          ctx.fillStyle = '#1e293b';
+          ctx.fillRect(x, winY, width, winH);
+          if ((floor + bay) % 5 === 0) {
+            // Warm interior light
+            ctx.fillStyle = 'rgba(253, 230, 138, 0.38)';
+            ctx.fillRect(x + 2, winY + 2, width - 4, winH - 4);
+          }
+          ctx.fillStyle = (floor + bay) % 3 === 0 ? 'rgba(186, 230, 253, 0.28)' : 'rgba(255, 255, 255, 0.14)';
+          ctx.fillRect(x + 1, winY + 1, width - 2, 5);
 
-        if (!office) {
-          ctx.fillStyle = '#cbd5e1';
-          ctx.fillRect(x - 1, y + 18, width + 2, 2);
+          // Concrete window sill + water-streak stain underneath (窗台滴水黑漬)
+          ctx.fillStyle = '#d6d3cd';
+          ctx.fillRect(x - 2, winY + winH, width + 4, 2.5);
+          const sillStain = ctx.createLinearGradient(0, winY + winH + 2, 0, winY + winH + 9);
+          sillStain.addColorStop(0, 'rgba(25, 22, 20, 0.26)');
+          sillStain.addColorStop(1, 'rgba(25, 22, 20, 0)');
+          ctx.fillStyle = sillStain;
+          ctx.fillRect(x - 1, winY + winH + 2, width + 2, 7);
 
-          // Taiwanese Stainless Iron Window Grille (外推防盜鐵窗花網格)
+          // Taiwanese Stainless / Green Iron Window Grille (外推防盜鐵窗花網格)
           if ((floor + bay) % 2 === 0) {
-            ctx.strokeStyle = '#94a3b8';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(x, y + 4, width, 14);
-            for (let gx = x + 3; gx < x + width; gx += 4) {
+            ctx.strokeStyle = (floor + variant) % 3 === 0 ? '#6b7c74' : '#94a3b8';
+            ctx.lineWidth = 1.2;
+            ctx.strokeRect(x, winY, width, winH);
+            for (let gx = x + 5; gx < x + width; gx += 6) {
               ctx.beginPath();
-              ctx.moveTo(gx, y + 4);
-              ctx.lineTo(gx, y + 18);
+              ctx.moveTo(gx, winY);
+              ctx.lineTo(gx, winY + winH);
               ctx.stroke();
             }
           }
 
-          // Wall-mounted AC unit on the side of window (外掛冷氣室外機)
+          // Wall-mounted AC outdoor unit (外掛冷氣室外機)
           if ((floor * 3 + bay) % 4 === 0) {
-            ctx.fillStyle = '#f1f5f9';
-            ctx.fillRect(x + width - 4, y + 11, 7, 6);
+            ctx.fillStyle = '#e2e8f0';
+            ctx.fillRect(x + width - 6, winY + winH - 9, 10, 8);
             ctx.fillStyle = '#334155';
-            ctx.fillRect(x + width - 2, y + 13, 3, 3);
+            ctx.fillRect(x + width - 4, winY + winH - 7, 4, 4);
           }
         }
       }
     }
     const texture = new THREE.CanvasTexture(canvas);
     texture.encoding = THREE.sRGBEncoding;
-    texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-    const material = new THREE.MeshStandardMaterial({ map: texture, roughness: office ? .45 : .85 });
+    texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    const material = new THREE.MeshStandardMaterial({
+      map: texture,
+      bumpMap: texture,
+      bumpScale: office ? 0.04 : 0.09,
+      roughness: office ? 0.24 : 0.86,
+      metalness: office ? 0.42 : 0.04
+    });
     facadeMaterials.set(key, material);
     return material;
   }
@@ -1479,23 +2220,87 @@ function* buildCity() {
   }
 
   const TAIWAN_LOCAL_SHOPS = [
-    { name: '八方雲集', sub: '鍋貼 • 水餃 專賣店', bg: '#f59e0b', fg: '#b91c1c', border: '#b91c1c', logo: '餃' },
-    { name: '早安美而美', sub: '中西式活力精緻早午餐', bg: '#ffffff', fg: '#15803d', border: '#b91c1c', logo: '美' },
-    { name: '全聯福利中心', sub: 'PX MART 買進美好生活', bg: '#1d4ed8', fg: '#ffffff', border: '#ef4444', logo: 'PX' },
-    { name: '全國電子', sub: '揪甘心 3C 家電特賣', bg: '#dc2626', fg: '#ffffff', border: '#ffffff', logo: '全' },
-    { name: '康是美', sub: 'COSMED 藥妝美彩生活館', bg: '#ea580c', fg: '#ffffff', border: '#ea580c', logo: 'C' },
-    { name: 'SYM 三陽機車', sub: '專業維修 排氣定檢 買賣', bg: '#b91c1c', fg: '#ffffff', border: '#ffffff', logo: 'SYM' },
-    { name: '大呼過癮', sub: '百元風味臭臭小火鍋', bg: '#eab308', fg: '#991b1b', border: '#991b1b', logo: '火' },
-    { name: '清心福全', sub: '特級純茶 • 手搖冷飲專賣', bg: '#16a34a', fg: '#ffffff', border: '#dc2626', logo: '清' },
-    { name: '池上木片便當', sub: '正宗池上米 現做現包', bg: '#78350f', fg: '#fef08a', border: '#fef08a', logo: '米' },
-    { name: '小林眼鏡', sub: '專業驗光配鏡 • 隱形眼鏡', bg: '#1e3a8a', fg: '#ffffff', border: '#60a5fa', logo: '鏡' },
-    { name: '屈臣氏', sub: 'Watsons 美麗與健康生活', bg: '#0891b2', fg: '#ffffff', border: '#ffffff', logo: 'W' },
-    { name: '台安藥局', sub: '健保特約 處方調劑 慢性病', bg: '#ffffff', fg: '#1d4ed8', border: '#16a34a', logo: '✚' },
-    { name: '振宇五金', sub: '水電衛浴 五金工具 配件', bg: '#0284c7', fg: '#ffffff', border: '#facc15', logo: '五' },
-    { name: '弘爺漢堡', sub: '美味活力早餐 連鎖專賣', bg: '#f97316', fg: '#ffffff', border: '#ffffff', logo: '弘' },
-    { name: '小北百貨', sub: '24H 生活五金 • 百貨批發', bg: '#facc15', fg: '#1e40af', border: '#dc2626', logo: '北' },
-    { name: '蝦皮店到店', sub: '包裹寄取 便利生活取件門市', bg: '#ea580c', fg: '#ffffff', border: '#ffffff', logo: 'S' }
+    { name: '四方雲集', sub: '鍋貼 • 水餃 專賣名店', bg: '#e69908', fg: '#991b1b', border: '#991b1b', logo: '餃' },
+    { name: '早安美又美', sub: '中西式活力精緻早午餐', bg: '#f5f3ee', fg: '#15803d', border: '#b91c1c', logo: '美' },
+    { name: '全民福利中心', sub: 'QM MART 買進美好生活', bg: '#1e40af', fg: '#ffffff', border: '#dc2626', logo: 'QM' },
+    { name: '全臺電子', sub: '足感心 3C 家電專賣', bg: '#c81e1e', fg: '#ffffff', border: '#f8fafc', logo: '全' },
+    { name: '康是好', sub: 'COSGOOD 藥妝生活館', bg: '#d94e0c', fg: '#ffffff', border: '#fed7aa', logo: 'C' },
+    { name: 'SYK 三洋機車', sub: '專業維修 排氣定檢 買賣', bg: '#991b1b', fg: '#ffffff', border: '#f8fafc', logo: 'SYK' },
+    { name: '大喊過癮', sub: '百元風味臭臭小火鍋', bg: '#d9a406', fg: '#7f1d1d', border: '#7f1d1d', logo: '火' },
+    { name: '清心福泉', sub: '特級純茶 • 手搖冷飲專賣', bg: '#15803d', fg: '#ffffff', border: '#dc2626', logo: '泉' },
+    { name: '池下木片便當', sub: '正宗池下米 現做現包', bg: '#6b2f0e', fg: '#fef08a', border: '#fef08a', logo: '米' },
+    { name: '大林眼鏡', sub: '專業驗光配鏡 • 隱形眼鏡', bg: '#1e3a8a', fg: '#ffffff', border: '#60a5fa', logo: '鏡' },
+    { name: '屈臣士', sub: 'Watso 美麗與健康生活', bg: '#0e7490', fg: '#ffffff', border: '#ffffff', logo: 'W' },
+    { name: '台康藥局', sub: '健保特約 處方調劑 慢性病', bg: '#f5f3ee', fg: '#1d4ed8', border: '#16a34a', logo: '✚' },
+    { name: '振華五金', sub: '水電衛浴 五金工具 配件', bg: '#0369a1', fg: '#ffffff', border: '#facc15', logo: '華' },
+    { name: '弘叔漢堡', sub: '美味活力早餐 連鎖專賣', bg: '#ea580c', fg: '#ffffff', border: '#ffffff', logo: '弘' },
+    { name: '小南百貨', sub: '24H 生活五金 • 百貨批發', bg: '#eab308', fg: '#1e3a8a', border: '#b91c1c', logo: '南' },
+    { name: '蝦殼店到店', sub: '包裹寄取 便利生活取件門市', bg: '#dc4e0c', fg: '#ffffff', border: '#ffffff', logo: 'S' }
   ];
+
+  function applyLightboxWeathering(ctx, w, h) {
+    // Internal fluorescent/LED lightbox hotspot gradient (中心燈管亮、邊緣鋁框暗)
+    const grad = ctx.createRadialGradient(w * 0.5, h * 0.5, w * 0.08, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
+    grad.addColorStop(0, 'rgba(255, 255, 255, 0.14)');
+    grad.addColorStop(0.65, 'rgba(255, 255, 255, 0.0)');
+    grad.addColorStop(1, 'rgba(15, 23, 42, 0.26)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Top-edge rain streaks & street dust weathering (上方雨水流痕與風化)
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
+    for (let sx = 12; sx < w; sx += 22) {
+      const len = 10 + ((sx * 17) % 24);
+      ctx.fillRect(sx, 0, 2, len);
+    }
+    // Metallic aluminum frame rim + corner rivets
+    ctx.strokeStyle = '#64748b';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, w - 4, h - 4);
+    ctx.fillStyle = '#cbd5e1';
+    for (const [rx, ry] of [[8, 8], [w - 8, 8], [8, h - 8], [w - 8, h - 8]]) {
+      ctx.beginPath();
+      ctx.arc(rx, ry, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  let interiorShopTex = null;
+  function getInteriorShopTexture() {
+    if (interiorShopTex) return interiorShopTex;
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    const bg = ctx.createLinearGradient(0, 0, 0, 128);
+    bg.addColorStop(0, '#451a03');
+    bg.addColorStop(0.55, '#78350f');
+    bg.addColorStop(1, '#1e293b');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 256, 128);
+    // Warm ceiling pendant lights
+    ctx.fillStyle = '#fef3c7';
+    for (const lx of [42, 108, 174, 224]) {
+      ctx.beginPath();
+      ctx.arc(lx, 18, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Merchandise shelves & counter silhouettes
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 86, 256, 42);
+    ctx.fillStyle = '#334155';
+    for (let sx = 16; sx < 240; sx += 44) {
+      ctx.fillRect(sx, 38, 32, 48);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(sx + 2, 46, 28, 4);
+      ctx.fillRect(sx + 2, 60, 28, 4);
+      ctx.fillRect(sx + 2, 74, 28, 4);
+      ctx.fillStyle = '#334155';
+    }
+    interiorShopTex = new THREE.CanvasTexture(canvas);
+    interiorShopTex.encoding = THREE.sRGBEncoding;
+    return interiorShopTex;
+  }
 
   const genericShopTextures = new Map();
   function getGenericStoreTexture(shop) {
@@ -1538,6 +2343,8 @@ function* buildCity() {
     ctx.fillStyle = shop.fg === '#ffffff' ? 'rgba(255,255,255,0.85)' : '#475569';
     ctx.font = 'bold 22px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
     ctx.fillText(shop.sub, 132, 94);
+
+    applyLightboxWeathering(ctx, 512, 128);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.encoding = THREE.sRGBEncoding;
@@ -1583,54 +2390,149 @@ function* buildCity() {
       ctx.fillText(c, 64, startY + idx * charSpacing);
     });
 
+    applyLightboxWeathering(ctx, 128, 384);
+
     const texture = new THREE.CanvasTexture(canvas);
     texture.encoding = THREE.sRGBEncoding;
     genericVerticalTextures.set(shop.name, texture);
     return texture;
   }
 
-  function addGenericStreetStorefront(bx, bz, bw, bd, brandIndex) {
-    const shop = TAIWAN_LOCAL_SHOPS[brandIndex % TAIWAN_LOCAL_SHOPS.length];
-    const frontZ = bz + bd / 2;
-    const signW = Math.min(bw * 0.72, 12.0);
-    const signH = 1.9;
-    const signY = 3.9;
+  const storefrontGlassMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    transparent: true,
+    opacity: 0.42,
+    roughness: 0.08,
+    metalness: 0.72
+  });
+  let interiorShopMat = null;
 
-    // Horizontal Storefront Signboard
+  function addGenericStreetStorefront(bx, bz, bw, bd, brandIndex, facing = 'S') {
+    const shop = TAIWAN_LOCAL_SHOPS[brandIndex % TAIWAN_LOCAL_SHOPS.length];
+    const spanAlong = (facing === 'E' || facing === 'W') ? bd : bw;
+    const halfDepth = ((facing === 'E' || facing === 'W') ? bw : bd) / 2;
+    const signW = Math.min(spanAlong * 0.78, 12.0);
+    const signH = 1.85;
+    const signY = 3.95;
+
+    if (!interiorShopMat) {
+      const iTex = getInteriorShopTexture();
+      interiorShopMat = new THREE.MeshStandardMaterial({
+        map: iTex,
+        emissiveMap: iTex,
+        emissive: new THREE.Color(0xffe8b8),
+        emissiveIntensity: state.timeOfDay === 'night' ? 0.95 : 0.42,
+        roughness: 0.6
+      });
+      window.taiwanEmissiveMaterials.push(interiorShopMat);
+    }
+
+    const sfGroup = new THREE.Group();
+    sfGroup.position.set(bx, 0, bz);
+    sfGroup.rotation.y = facing === 'N' ? Math.PI : facing === 'E' ? Math.PI / 2 : facing === 'W' ? -Math.PI / 2 : 0;
+    group.add(sfGroup);
+
+    // 1F Recessed Interior Depth (一樓室內景深貨架＋暖光吊燈 + 外層反光落地玻璃＋鋁框＋鐵捲門箱)
+    const interiorMesh = new THREE.Mesh(new THREE.PlaneGeometry(signW * 0.90, 2.50), interiorShopMat);
+    interiorMesh.position.set(0, 1.50, halfDepth + 0.03);
+    sfGroup.add(interiorMesh);
+
+    const winMesh = new THREE.Mesh(cube, storefrontGlassMat);
+    winMesh.position.set(0, 1.50, halfDepth + 0.16);
+    winMesh.scale.set(signW * 0.92, 2.52, 0.03);
+    sfGroup.add(winMesh);
+
+    // Vertical aluminum mullions + top roll-up shutter box
+    for (const mx of [-0.45, 0, 0.45]) {
+      const mul = new THREE.Mesh(cube, materials.trim);
+      mul.position.set(mx * signW, 1.50, halfDepth + 0.18);
+      mul.scale.set(0.08, 2.55, 0.08);
+      sfGroup.add(mul);
+    }
+    const shutterBox = new THREE.Mesh(cube, materials.trim);
+    shutterBox.position.set(0, 2.88, halfDepth + 0.16);
+    shutterBox.scale.set(signW * 0.96, 0.24, 0.24);
+    sfGroup.add(shutterBox);
+
+    // 3D Steel Lightbox Cabinet + Acrylic Face (立體鋁框壓克力燈箱招牌)
+    const signBox = new THREE.Mesh(cube, materials.trim);
+    signBox.position.set(0, signY, halfDepth + 0.12);
+    signBox.scale.set(signW + 0.16, signH + 0.14, 0.22);
+    sfGroup.add(signBox);
+
     const signGeo = new THREE.PlaneGeometry(signW, signH);
-    const signMat = new THREE.MeshBasicMaterial({
-      map: getGenericStoreTexture(shop),
+    const signTex = getGenericStoreTexture(shop);
+    const signMat = new THREE.MeshStandardMaterial({
+      map: signTex,
+      roughness: 0.20,
+      metalness: 0.12,
+      emissiveMap: signTex,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: state.timeOfDay === 'night' ? 0.72 : (state.timeOfDay === 'sunset' ? 0.30 : 0.08),
       side: THREE.DoubleSide
     });
     const signMesh = new THREE.Mesh(signGeo, signMat);
-    signMesh.position.set(bx, signY, frontZ + 0.15);
-    group.add(signMesh);
+    signMesh.position.set(0, signY, halfDepth + 0.25);
+    signMesh.castShadow = signMesh.receiveShadow = true;
+    sfGroup.add(signMesh);
 
-    // Weather Awning / Steel Canopy below sign
-    block('metalRoof', bx, 2.95, frontZ + 0.75, signW + 0.4, 0.15, 1.4);
-    registerBoxCollider(bx, 2.95, frontZ + 0.75, signW + 0.4, 0.15, 1.4, shop.name + '雨庇', '#657078', false);
+    // Gooseneck Spotlight Arms above signboard (招牌上方投射燈臂)
+    for (const lx of [-0.30, 0.30]) {
+      const arm = new THREE.Mesh(cube, materials.asphalt);
+      arm.position.set(lx * signW, signY + signH / 2 + 0.18, halfDepth + 0.34);
+      arm.scale.set(0.06, 0.06, 0.42);
+      sfGroup.add(arm);
+      const lamp = new THREE.Mesh(cube, materials.white);
+      lamp.position.set(lx * signW, signY + signH / 2 + 0.12, halfDepth + 0.52);
+      lamp.scale.set(0.14, 0.08, 0.14);
+      sfGroup.add(lamp);
+    }
+
+    // Sloped Taiwanese Fabric Awning / Canopy below sign (彩色帆布遮雨棚)
+    const awningPalette = [0xb91c1c, 0x15803d, 0x1d4ed8, 0xc2410c, 0x0f766e, 0x991b1b];
+    const awningMat = new THREE.MeshStandardMaterial({
+      color: awningPalette[brandIndex % awningPalette.length],
+      roughness: 0.78,
+      metalness: 0.05
+    });
+    const awningMesh = new THREE.Mesh(cube, awningMat);
+    awningMesh.position.set(0, 2.92, halfDepth + 0.72);
+    awningMesh.scale.set(signW + 0.3, 0.12, 1.4);
+    awningMesh.rotation.x = 0.24;
+    awningMesh.castShadow = awningMesh.receiveShadow = true;
+    sfGroup.add(awningMesh);
 
     // Protruding Vertical Double-Sided Blade Sign
-    const vertW = 1.25;
-    const vertH = 3.4;
-    const vertY = 5.2;
-    const vertX = bx + bw * 0.42;
-    const vertZ = frontZ + vertW / 2 + 0.1;
+    const vertW = 1.15;
+    const vertH = 3.2;
+    const vertY = 5.1;
+    const vertX = spanAlong * 0.40;
+    const vertZ = halfDepth + vertW / 2 + 0.12;
 
     const vertGeo = new THREE.PlaneGeometry(vertW, vertH);
-    const vertMat = new THREE.MeshBasicMaterial({
-      map: getGenericVerticalTexture(shop),
+    const vertTex = getGenericVerticalTexture(shop);
+    const vertMat = new THREE.MeshStandardMaterial({
+      map: vertTex,
+      roughness: 0.42,
+      metalness: 0.05,
+      emissiveMap: vertTex,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: state.timeOfDay === 'night' ? 0.65 : (state.timeOfDay === 'sunset' ? 0.25 : 0.04),
       side: THREE.DoubleSide
     });
     const vertMesh = new THREE.Mesh(vertGeo, vertMat);
     vertMesh.position.set(vertX, vertY, vertZ);
     vertMesh.rotation.y = Math.PI / 2;
-    group.add(vertMesh);
+    vertMesh.castShadow = vertMesh.receiveShadow = true;
+    sfGroup.add(vertMesh);
 
     // Steel Wall Mounting Brackets
-    block('trim', vertX, vertY + 1.2, frontZ + vertW / 2, 0.08, 0.08, vertW);
-    block('trim', vertX, vertY - 1.2, frontZ + vertW / 2, 0.08, 0.08, vertW);
-    registerBoxCollider(vertX, vertY, vertZ, 0.25, vertH, vertW, shop.name + '側招', '#475569', false);
+    for (const byOff of [1.1, -1.1]) {
+      const br = new THREE.Mesh(cube, materials.trim);
+      br.position.set(vertX, vertY + byOff, halfDepth + vertW / 2);
+      br.scale.set(0.08, 0.08, vertW);
+      sfGroup.add(br);
+    }
   }
 
   const gableShape = new THREE.Shape();
@@ -1664,23 +2566,91 @@ function* buildCity() {
     let topX = x, topZ = z, topW = w, topD = d;
     const topY = .2 + height + .36;
 
-    if (office && variant !== 0) {
-      const podium = variant === 1 ? 2 : Math.ceil(floors * .45);
-      const bottom = .2 + podium * 3.2;
-      mass(x, z, w, d, .2, podium);
-      const offset = variant === 2 ? w * .17 : 0;
-      topX = x + offset;
-      topW = w * (variant === 2 ? .58 : .70);
-      topD = d * .73;
-      mass(topX, topZ, topW, topD, bottom, floors - podium, false);
+    const CORP_SIGNS = [
+      { name: '國安世華金控', sub: 'KATHY FINANCIAL', bg: '#14532d', accent: '#4ade80', emblem: 'K' },
+      { name: '台興金融大樓', sub: 'TAIXING BANK', bg: '#991b1b', accent: '#fca5a5', emblem: '興' },
+      { name: '富安商辦中心', sub: 'FUAN TOWER', bg: '#1e3a8a', accent: '#60a5fa', emblem: 'F' },
+      { name: '遠方科技廣場', sub: 'FARTECH PLAZA', bg: '#0f766e', accent: '#5eead4', emblem: '遠' },
+      { name: '誠信生活商場', sub: 'CHENGXIN LIFE', bg: '#292524', accent: '#fbbf24', emblem: '誠' },
+      { name: '星光商業大樓', sub: 'STARLIGHT TOWER', bg: '#b91c1c', accent: '#fde047', emblem: '★' },
+      { name: '玉峰金融總部', sub: 'YUFENG HOLDING', bg: '#15803d', accent: '#bbf7d0', emblem: '玉' },
+      { name: '中臺電信大樓', sub: 'ZHONGTAI 5G+', bg: '#1d4ed8', accent: '#38bdf8', emblem: 'T' },
+      { name: '宏基科技中心', sub: 'HONGJI TECH', bg: '#166534', accent: '#86efac', emblem: 'H' },
+      { name: '兆盛國際大樓', sub: 'ZHAOSHENG INTL', bg: '#7f1d1d', accent: '#fdba74', emblem: '兆' }
+    ];
 
-      if (variant === 2) {
+    const ov = variant % 5;
+    if (office && ov !== 0) {
+      if (ov === 1) {
+        // Granite Podium + Octagonal Glass Skyscraper (花崗岩基座＋八角形玻璃帷幕塔樓)
+        const podium = 2;
+        const bottom = .2 + podium * 3.2;
+        mass(x, z, w, d, .2, podium);
+        const rad = Math.min(w, d) * 0.40;
+        const cylH = (floors - podium) * 3.2;
+        const cylMat = facade('office', floors - podium, 1);
+        const cylMesh = new THREE.Mesh(
+          new THREE.CylinderGeometry(rad, rad * 1.03, cylH, 8),
+          [cylMat, materials[roof], materials.concrete]
+        );
+        cylMesh.position.set(x, bottom + cylH / 2, z);
+        cylMesh.rotation.y = Math.PI / 8;
+        cylMesh.castShadow = cylMesh.receiveShadow = true;
+        group.add(cylMesh);
+        registerBoxCollider(x, bottom + cylH / 2, z, rad * 1.85, cylH, rad * 1.85, label, color, false);
+        topW = rad * 1.5;
+        topD = rad * 1.5;
+      } else if (ov === 2) {
+        // Twin-Tower Skybridge Complex + Spire (雙塔空中連廊＋天線尖塔)
+        const podium = 2;
+        const bottom = .2 + podium * 3.2;
+        mass(x, z, w, d, .2, podium);
+        const towerW = w * 0.38;
+        const towerD = d * 0.78;
+        const remFloors = Math.max(4, floors - podium);
+        mass(x - w * 0.25, z, towerW, towerD, bottom, remFloors, false);
+        mass(x + w * 0.25, z, towerW, towerD, bottom, remFloors, false);
+        // Elevated Glass Skybridge at 60% height
+        const bridgeY = bottom + remFloors * 3.2 * 0.62;
+        block('trim', x, bridgeY, z, w * 0.34, 2.8, towerD * 0.45);
+        topX = x + w * 0.25;
+        topW = towerW;
+        topD = towerD;
         block('concrete', topX, height + 1.35, z, topW * .42, 2.2, topD * .42);
-        block('trim', topX, height + 4.0, z, .25, 4.2, .25);
-      } else {
-        for (const side of [-1, 1]) {
-          block('trim', x + side * w * .27, height / 2 + 3.3, z + d * .371, .28, height - 6.4, .28);
+        block('trim', topX, height + 4.2, z, .25, 4.6, .25);
+      } else if (ov === 3) {
+        // 3-Tier Stepped Terraced Financial Tower with Horizontal Sunshades (三段退縮金融大樓)
+        const f1 = Math.max(3, Math.floor(floors * 0.45));
+        const f2 = Math.max(2, Math.floor(floors * 0.32));
+        const f3 = Math.max(2, floors - f1 - f2);
+        mass(x, z, w, d, .2, f1);
+        mass(x, z, w * 0.80, d * 0.82, .2 + f1 * 3.2, f2, false);
+        topW = w * 0.60;
+        topD = d * 0.64;
+        mass(x, z, topW, topD, .2 + (f1 + f2) * 3.2, f3, false);
+        for (let f = 2; f < f1; f += 2) {
+          const fy = 0.2 + f * 3.2;
+          block('trim', x, fy, z + d / 2 + 0.22, w + 0.25, 0.14, 0.42);
+          block('trim', x, fy, z - d / 2 - 0.22, w + 0.25, 0.14, 0.42);
         }
+      } else {
+        // Bold Corner-Pier & Horizontal Banded Modern Tower with Glowing Crown (柱列退縮＋發光冠頂)
+        mass(x, z, w * 0.92, d * 0.92, .2, floors);
+        for (const sx of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            block('concrete', x + sx * w * 0.44, .2 + height / 2, z + sz * d * 0.44, 0.72, height + 0.8, 0.72);
+          }
+        }
+        block('trim', x, .2 + height - 0.8, z, w * 0.98, 1.2, d * 0.98);
+        topW = w * 0.92;
+        topD = d * 0.92;
+      }
+    } else if (office && ov === 0) {
+      // Modern Glass Curtain-Wall Tower with Vertical Aluminum Fins & Cooling Crown
+      mass(x, z, w, d, .2, floors);
+      for (const fOff of [-0.34, -0.11, 0.11, 0.34]) {
+        block('trim', x + fOff * w, .2 + height / 2, z + d / 2 + 0.16, 0.20, height, 0.32);
+        block('trim', x + fOff * w, .2 + height / 2, z - d / 2 - 0.16, 0.20, height, 0.32);
       }
     } else {
       const stepped = kind === 'housing' && variant === 2;
@@ -1695,13 +2665,25 @@ function* buildCity() {
         mass(x, z, w, d, .2, floors);
       }
 
-      if (kind === 'housing' && variant !== 0) {
+      if (kind === 'housing') {
+        // 3D Concrete floor-slab ledges & window rain canopies (水泥層間線腳與雨遮)
         for (let floor = 1; floor < floors; floor++) {
-          for (const side of [-1, 1]) {
-            const front = z + d / 2 + .3;
-            const bay = x + side * w * .22;
-            block('concrete', bay, floor * 3.2 + .56, front, w * .27, .25, 1);
-            block(variant === 1 ? 'trim' : 'wood', bay, floor * 3.2 + .94, front + .49, w * .27, .58, .08);
+          const fy = 0.2 + floor * 3.2;
+          block('concrete', x, fy, z + d / 2 + 0.14, w + 0.12, 0.18, 0.28);
+          block('concrete', x, fy, z - d / 2 - 0.14, w + 0.12, 0.18, 0.28);
+          // 3D Exterior AC outdoor units mounted along facade
+          if (floor % 2 === (variant % 2)) {
+            block('white', x - w * 0.28, fy + 1.0, z + d / 2 + 0.24, 0.85, 0.58, 0.36);
+            block('white', x + w * 0.28, fy + 1.0, z - d / 2 - 0.24, 0.85, 0.58, 0.36);
+          }
+          // Protruding balconies with railings
+          if (variant !== 0 || floor % 2 === 1) {
+            for (const side of [-1, 1]) {
+              const front = z + d / 2 + 0.38;
+              const bay = x + side * w * 0.22;
+              block('concrete', bay, fy + 0.24, front, w * 0.28, 0.22, 0.88);
+              block(variant === 1 ? 'trim' : 'wood', bay, fy + 0.62, front + 0.40, w * 0.28, 0.56, 0.08);
+            }
           }
         }
       }
@@ -1751,10 +2733,131 @@ function* buildCity() {
       registerBoxCollider(shedX, topY + shedH / 2, shedZ, shedW, shedH, shedD, '頂樓鐵皮加蓋', shedColor === 'tinGreen' ? '#3d4d42' : '#45515e', false);
     }
 
-    // 5. Commercial AC Chillers
+    // 5. Commercial AC Chillers, 3D Framed Corporate Rooftop Signage & LED Video Walls (商辦立體企業招牌與 LED 電視牆)
     if (office) {
       for (let i = 0; i < 2; i++) {
         block('trim', topX + (i - 0.5) * 3.2, topY + 0.6, topZ + topD * 0.2, 1.8, 1.2, 1.4);
+      }
+      const corpIdx = Math.abs(Math.round(x * 3 + z * 5 + variant)) % CORP_SIGNS.length;
+      const corp = CORP_SIGNS[corpIdx];
+      const corpW = Math.min(topW * 0.86, 10.5);
+
+      // Build realistic 3D framed corporate sign texture with emblem + bilingual text
+      const cCanvas = document.createElement('canvas');
+      cCanvas.width = 512;
+      cCanvas.height = 128;
+      const cCtx = cCanvas.getContext('2d');
+      cCtx.fillStyle = corp.bg;
+      cCtx.fillRect(0, 0, 512, 128);
+      cCtx.fillStyle = corp.accent;
+      cCtx.fillRect(0, 0, 512, 8);
+      cCtx.fillRect(0, 120, 512, 8);
+      // Left geometric badge
+      cCtx.beginPath();
+      cCtx.arc(64, 64, 42, 0, Math.PI * 2);
+      cCtx.fillStyle = '#ffffff';
+      cCtx.fill();
+      cCtx.fillStyle = corp.bg;
+      cCtx.font = 'bold 42px "Microsoft JhengHei", sans-serif';
+      cCtx.textAlign = 'center';
+      cCtx.textBaseline = 'middle';
+      cCtx.fillText(corp.emblem, 64, 66);
+      // Chinese + English title
+      cCtx.fillStyle = '#ffffff';
+      cCtx.textAlign = 'left';
+      cCtx.font = 'bold 50px "Microsoft JhengHei", sans-serif';
+      cCtx.fillText(corp.name, 122, 50);
+      cCtx.fillStyle = corp.accent;
+      cCtx.font = 'bold 22px sans-serif';
+      cCtx.fillText(corp.sub, 124, 96);
+
+      const corpTex = new THREE.CanvasTexture(cCanvas);
+      corpTex.encoding = THREE.sRGBEncoding;
+      const corpMat = new THREE.MeshStandardMaterial({
+        map: corpTex,
+        emissiveMap: corpTex,
+        emissive: new THREE.Color(0xffffff),
+        emissiveIntensity: state.timeOfDay === 'night' ? 0.72 : 0.16,
+        roughness: 0.35
+      });
+      window.taiwanEmissiveMaterials.push(corpMat);
+
+      for (const side of [-1, 1]) {
+        const szPos = topZ + side * (topD / 2 + 0.16);
+        // Steel backing cabinet + mounting struts
+        block('trim', topX, topY + 1.15, szPos - side * 0.14, corpW + 0.35, 2.0, 0.24);
+        block('trim', topX - corpW * 0.32, topY + 0.3, szPos - side * 0.25, 0.18, 0.8, 0.35);
+        block('trim', topX + corpW * 0.32, topY + 0.3, szPos - side * 0.25, 0.18, 0.8, 0.35);
+        const cFace = new THREE.Mesh(new THREE.PlaneGeometry(corpW, 1.8), corpMat);
+        cFace.position.set(topX, topY + 1.15, szPos + side * 0.02);
+        if (side < 0) cFace.rotation.y = Math.PI;
+        group.add(cFace);
+      }
+
+      // Large Exterior Glowing LED Video Wall (商辦外牆大型 LED 電視牆廣告)
+      if (ov === 0 || ov === 2 || ov === 3) {
+        const LED_ADS = [
+          { headline: '中臺電信 5G+ 極速時代', sub: '全台覆蓋第一 • 智慧城市旗艦', c1: '#0284c7', c2: '#1e1b4b', tag: '5G LIVE' },
+          { headline: '星光百貨 週年慶盛典', sub: '全館滿 5000 送 500 • VIP 尊榮禮遇', c1: '#be123c', c2: '#4c0519', tag: 'SALE 80%' },
+          { headline: '台興行動銀行 智慧理財', sub: '24H 數位金融 • 跨行轉帳零手續費', c1: '#b91c1c', c2: '#18181b', tag: 'FINTECH' },
+          { headline: '遠方雲端 AI 企業高峰會', sub: '算力新紀元 • 台北信義旗艦館', c1: '#0f766e', c2: '#0f172a', tag: 'AI EXPO' },
+          { headline: '誠信生活 城市閱讀季', sub: '24小時書店 • 精選文創設計展', c1: '#b45309', c2: '#1c1917', tag: 'CULTURE' }
+        ];
+        const ad = LED_ADS[corpIdx % LED_ADS.length];
+        const lCanvas = document.createElement('canvas');
+        lCanvas.width = 512;
+        lCanvas.height = 256;
+        const lCtx = lCanvas.getContext('2d');
+        const grad = lCtx.createLinearGradient(0, 0, 512, 256);
+        grad.addColorStop(0, ad.c1);
+        grad.addColorStop(1, ad.c2);
+        lCtx.fillStyle = grad;
+        lCtx.fillRect(0, 0, 512, 256);
+        // Diagonal graphic accent
+        lCtx.fillStyle = 'rgba(255,255,255,0.12)';
+        lCtx.beginPath();
+        lCtx.moveTo(320, 0); lCtx.lineTo(512, 0); lCtx.lineTo(512, 256); lCtx.lineTo(220, 256);
+        lCtx.closePath();
+        lCtx.fill();
+        // Top tag pill
+        lCtx.fillStyle = '#facc15';
+        lCtx.fillRect(28, 28, 128, 34);
+        lCtx.fillStyle = '#0f172a';
+        lCtx.font = 'bold 22px sans-serif';
+        lCtx.textAlign = 'center';
+        lCtx.textBaseline = 'middle';
+        lCtx.fillText(ad.tag, 92, 46);
+        // Main ad headline
+        lCtx.fillStyle = '#ffffff';
+        lCtx.textAlign = 'left';
+        lCtx.font = 'bold 42px "Microsoft JhengHei", sans-serif';
+        lCtx.fillText(ad.headline, 28, 128);
+        lCtx.fillStyle = '#e2e8f0';
+        lCtx.font = 'bold 22px "Microsoft JhengHei", sans-serif';
+        lCtx.fillText(ad.sub, 28, 186);
+        // Subtle LED matrix scanline overlay
+        lCtx.fillStyle = 'rgba(0,0,0,0.16)';
+        for (let sy = 0; sy < 256; sy += 6) {
+          lCtx.fillRect(0, sy, 512, 2);
+        }
+        const ledTex = new THREE.CanvasTexture(lCanvas);
+        ledTex.encoding = THREE.sRGBEncoding;
+        const ledMat = new THREE.MeshStandardMaterial({
+          map: ledTex,
+          emissiveMap: ledTex,
+          emissive: new THREE.Color(0xffffff),
+          emissiveIntensity: state.timeOfDay === 'night' ? 0.95 : 0.42,
+          roughness: 0.22
+        });
+        window.taiwanEmissiveMaterials.push(ledMat);
+        const ledW = Math.min(w * 0.72, 8.6);
+        const ledH = ledW * 0.52;
+        const ledY = 9.2;
+        const ledZ = z + d / 2 + 0.24;
+        block('asphalt', x, ledY, ledZ - 0.10, ledW + 0.4, ledH + 0.4, 0.22); // Aluminum bezel
+        const ledFace = new THREE.Mesh(new THREE.PlaneGeometry(ledW, ledH), ledMat);
+        ledFace.position.set(x, ledY, ledZ + 0.04);
+        group.add(ledFace);
       }
     }
   }
@@ -1766,15 +2869,23 @@ function* buildCity() {
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = color;
     ctx.fillRect(0, 0, 512, 128);
-    ctx.fillStyle = '#fffaf0';
+    ctx.fillStyle = '#f8f6f0';
     ctx.textAlign = 'center';
     ctx.font = 'bold 58px sans-serif';
     ctx.fillText(text, 256, 84);
     const texture = new THREE.CanvasTexture(canvas);
     texture.encoding = THREE.sRGBEncoding;
     const face = new THREE.Mesh(new THREE.PlaneGeometry(width, height),
-      new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }));
+      new THREE.MeshStandardMaterial({
+        map: texture,
+        roughness: 0.48,
+        emissiveMap: texture,
+        emissive: new THREE.Color(0xffffff),
+        emissiveIntensity: state.timeOfDay === 'night' ? 0.55 : (state.timeOfDay === 'sunset' ? 0.2 : 0.02),
+        side: THREE.DoubleSide
+      }));
     face.position.set(x, y, z);
+    face.castShadow = face.receiveShadow = true;
     group.add(face);
     return face;
   }
@@ -1844,17 +2955,31 @@ function* buildCity() {
       registerBoxCollider(px, 2.2, pz, 6.6, 4.2, 6.6, '公園涼亭', '#715342', false);
     }
 
-    // 4. Shade Trees & Park Benches
+    // 4. Organic Shade Trees & Park Benches
+    const parkTrunkGeo = new THREE.CylinderGeometry(0.18, 0.27, 2.8, 8);
+    const parkCrownGeo = new THREE.DodecahedronGeometry(1.45, 1);
     for (const side of [-1, 1]) {
       for (const dx of [-.38, -.15, .15, .38]) {
         const tx = x + w * dx;
         const tz = z + side * (d / 2 - 4.5);
-        block('wood', tx, 1.62, tz, .43, 2.65, .43);
-        const tree = new THREE.Mesh(new THREE.IcosahedronGeometry(2.1, 1), materials.leaves);
-        tree.position.set(tx, 3.25, tz);
-        tree.scale.y = 1.15;
-        tree.castShadow = true;
-        group.add(tree);
+        const trunk = new THREE.Mesh(parkTrunkGeo, materials.wood);
+        trunk.position.set(tx, 1.55, tz);
+        trunk.castShadow = trunk.receiveShadow = true;
+        group.add(trunk);
+        const puffs = [
+          [0, 3.6, 0, 1.15, 0.95],
+          [-0.75, 3.1, 0.45, 0.85, 0.8],
+          [0.75, 3.2, -0.4, 0.9, 0.82],
+          [0.15, 3.15, 0.75, 0.82, 0.78]
+        ];
+        for (const [ox, oy, oz, sx, sy] of puffs) {
+          const crown = new THREE.Mesh(parkCrownGeo, materials.leaves);
+          crown.position.set(tx + ox, oy, tz + oz);
+          crown.scale.set(sx, sy, sx);
+          crown.rotation.set(ox, oz, oy);
+          crown.castShadow = crown.receiveShadow = true;
+          group.add(crown);
+        }
         registerBoxCollider(tx, 1.62, tz, .43, 2.65, .43, '公園樹幹', '#608557', false);
         registerBoxCollider(tx, 3.25, tz, 3.5, 4.15, 3.5, '公園樹冠', '#608557', false);
       }
@@ -1866,129 +2991,191 @@ function* buildCity() {
     sign(name, x - w * .24, 2, z + d / 2 - 1.2, 7, 1.25, '#386148');
   }
 
-  const westEdges = [CITY.minX, ...CITY.avenues, CITY.maxX];
-  const northEdges = [CITY.minZ, ...CITY.streets, CITY.maxZ];
-  for (let row = 0; row < northEdges.length - 1; row++) {
+  function chamferCornerBuilding(label, cx, cz, bw, bd, cornerSignX, cornerSignZ, floors, variant = 0) {
+    const h = floors * 3.2;
+    const cut = 3.8;
+    const hw = bw / 2, hd = bd / 2;
+    const pts = [];
+    // Build footprint in XZ plane (Shape XY -> rotated -PI/2 around X)
+    if (cornerSignX > 0 && cornerSignZ > 0) {
+      pts.push([-hw, -hd], [hw, -hd], [hw, hd - cut], [hw - cut, hd], [-hw, hd]);
+    } else if (cornerSignX < 0 && cornerSignZ > 0) {
+      pts.push([-hw, -hd], [hw, -hd], [hw, hd], [-hw + cut, hd], [-hw, hd - cut]);
+    } else if (cornerSignX > 0 && cornerSignZ < 0) {
+      pts.push([-hw, -hd], [hw - cut, -hd], [hw, -hd + cut], [hw, hd], [-hw, hd]);
+    } else {
+      pts.push([-hw + cut, -hd], [hw, -hd], [hw, hd], [-hw, hd], [-hw, -hd + cut]);
+    }
+    const shape = new THREE.Shape();
+    pts.forEach(([px, pz], idx) => (idx === 0 ? shape.moveTo(px, -pz) : shape.lineTo(px, -pz)));
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    // Scale UVs so facade texture tiles cleanly around the chamfered building
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, uv.getX(i) / Math.max(bw, bd), uv.getY(i) / h);
+    }
+    const wallMat = facade('housing', floors, variant);
+    const mesh = new THREE.Mesh(geo, [materials.slateRoof, wallMat]);
+    mesh.position.set(cx, 0.2, cz);
+    mesh.castShadow = mesh.receiveShadow = true;
+    group.add(mesh);
+    registerBoxCollider(cx, 0.2 + h / 2, cz, bw - 0.6, h, bd - 0.6, label, '#947b6f', true);
+
+    // Rooftop water tank & stairhead
+    const topY = 0.2 + h;
+    addWaterTank(cx - cornerSignX * bw * 0.15, topY, cz - cornerSignZ * bd * 0.15);
+
+    // 45-degree Chamfered Corner Signboard (三角窗斜角大招牌)
+    const diagX = cx + cornerSignX * (hw - cut * 0.45);
+    const diagZ = cz + cornerSignZ * (hd - cut * 0.45);
+    const rotAngle = Math.atan2(cornerSignX, cornerSignZ);
+    const sMesh = sign(label, diagX, 4.2, diagZ, cut * 1.35, 1.5, variant % 2 === 0 ? '#1d4ed8' : '#b91c1c');
+    sMesh.rotation.y = rotAngle;
+  }
+
+  // 1. Place Major Civic Landmarks in Radial Sectors (各大分區公共地標)
+  // 市立國民小學 at (-64, -158) (aligned with Option A Training Waypoint 1)
+  {
+    const sx = -64, sz = -158, sw = 40, sd = 32;
+    block('concrete', sx, 1.1, sz + sd / 2 - 0.3, sw * 0.35, 1.8, 0.35);
+    block('concrete', sx + sw * 0.28, 1.1, sz + sd / 2 - 0.3, sw * 0.35, 1.8, 0.35);
+    block('concrete', sx + sw / 2 - 0.3, 1.1, sz, 0.35, 1.8, sd);
+    sign('市立國民小學', sx - 2, 2.6, sz + sd / 2 - 0.1, 8.5, 1.35, '#1e3a8a');
+    const wingX = sx, wingZ = sz - sd * 0.25, wingW = sw - 4, wingD = 10.5;
+    building('市立國民小學', 'housing', wingX, wingZ, wingW, wingD, 4, 1);
+    for (let cf = 1; cf < 4; cf++) {
+      const cy = 0.2 + cf * 3.2;
+      block('concrete', wingX, cy + 0.12, wingZ + wingD / 2 + 1.0, wingW, 0.24, 2.0);
+      block('white', wingX, cy + 0.65, wingZ + wingD / 2 + 1.92, wingW, 0.85, 0.12);
+    }
+    const fieldZ = sz + sd * 0.18, fw = sw - 6, fd = sd * 0.44;
+    block('puTrack', sx, 0.22, fieldZ, fw, 0.08, fd);
+    block('lawn', sx, 0.26, fieldZ, fw - 5.5, 0.08, fd - 5.5);
+    block('trim', sx - fw / 2 + 2.2, 4.2, fieldZ, 0.14, 8.0, 0.14);
+    cityMapAreas.push({ x: sx, z: fieldZ, w: fw, d: fd, color: '#395c4a' });
+    cityLandmarks.push({ name: '市立小學', x: sx, z: sz });
+  }
+
+  park('市民公園', 52, -196, 32, 24);
+  building('市民服務中心', 'civic', -26, -196, 26, 20, 3);
+  sign('市民服務中心', -26, 5.2, -184.5, 12, 2.1, '#5a5072');
+  cityLandmarks.push({ name: '市民服務中心', x: -26, z: -196 });
+
+  park('鄰里公園', -36, 2, 34, 16);
+  building('市區派出所', 'civic', 36, 2, 26, 15, 3);
+  sign('市區派出所', 36, 5.1, 10.2, 11, 1.8, '#344d79');
+  cityLandmarks.push({ name: '市區派出所', x: 36, z: 2 });
+
+  const landmarkZones = [
+    { x: -64, z: -158, rx: 24, rz: 20 }, // 市立國民小學
+    { x: 52, z: -196, rx: 20, rz: 16 },  // 市民公園
+    { x: -26, z: -196, rx: 18, rz: 15 }, // 市民服務中心
+    { x: -36, z: 2, rx: 21, rz: 12 },    // 鄰里公園
+    { x: 36, z: 2, rx: 17, rz: 12 }      // 市區派出所
+  ];
+
+  // 2. Populate Entire Radial + Ring + Diagonal City with High-Density Downtown Buildings & 1F Storefronts
+  let lotIdx = 0;
+  for (let gz = -210; gz <= 10; gz += 17) {
     yield;
-    for (let col = 0; col < westEdges.length - 1; col++) {
-      const left = westEdges[col] + (col === 0 ? 2 : 7.1);
-      const right = westEdges[col + 1] - (col === westEdges.length - 2 ? 2 : 7.1);
-      const north = northEdges[row] + (row === 0 ? 2 : 8.1);
-      const south = northEdges[row + 1] - (row === northEdges.length - 2 ? 2 : 8.1);
-      const x = (left + right) / 2, z = (north + south) / 2;
-      const w = right - left, d = south - north;
-      if (north < RAILWAY_Z && south > RAILWAY_Z) continue;
-      if (row === 5 && (col === 2 || col === 3)) continue;
-      block('sidewalk', x, .09, z, w, .18, d);
-      surface(walkSurface, x, .182, z, w, d, 4.8);
-      if (row === 2 && col === 3) {
-        park('市民公園', x, z, w - 4, d - 4);
-      } else if (row === 2 && col === 2) {
-        building('市民服務中心', 'civic', x, z - 5, 34, 24, 3);
-        sign('市民服務中心', x, 5.2, z + 7.1, 13, 2.3, '#5a5072');
-        cityLandmarks.push({name:'市民服務中心', x, z});
-      } else {
-        const office = row <= 2 && col >= 2 && col <= 4;
-        const floors = office ? 8 + (row * 7 + col * 5) % 15 : 4 + (row + col * 2) % 6;
-        const kind = office ? 'office' : 'housing';
-        const name = office ? '商辦大樓' : '住宅大樓';
-        const b1X = x - w * .24, b1Z = z, b1W = w * .39, b1D = d * .60;
-        const b2X = x + w * .24, b2Z = z + d * .09, b2W = w * .35, b2D = d * .56;
-        building(name, kind, b1X, b1Z, b1W, b1D, floors, (row + col) % 3);
-        building(name, kind, b2X, b2Z, b2W, b2D, Math.max(3, floors - 3), (row + col + 1) % 3);
-        // Procedural authentic Taiwanese neighborhood storefronts on ground floor
-        addGenericStreetStorefront(b1X, b1Z, b1W, b1D, (row * 3 + col * 2) % TAIWAN_LOCAL_SHOPS.length);
-        addGenericStreetStorefront(b2X, b2Z, b2W, b2D, (row * 3 + col * 2 + 1) % TAIWAN_LOCAL_SHOPS.length);
+    for (let gx = -108; gx <= 108; gx += 17) {
+      // Slight organic jitter so blocks follow radial/ring feel rather than rigid grid
+      const jx = gx + (((lotIdx * 7) % 3) - 1) * 1.1;
+      const jz = gz + (((lotIdx * 11) % 3) - 1) * 1.1;
+      lotIdx++;
+
+      if (!isClearOfRoads(jx, jz, 8.2)) continue;
+      if (landmarkZones.some(lz => Math.abs(jx - lz.x) < lz.rx && Math.abs(jz - lz.z) < lz.rz)) continue;
+      // Keep central avenue shophouse corridor (x in [-20..20], z in [-86..-30]) clear for taiwanShops
+      if (Math.abs(jx) < 20 && jz > -88 && jz < -28) continue;
+
+      const seedH = Math.abs(Math.round(jx * 3 + jz * 5 + lotIdx * 7));
+      const bw = 13.0 + (seedH % 3) * 0.8;
+      const bd = 12.8 + ((seedH >> 2) % 3) * 0.8;
+
+      // Zoning: East/North-East Financial High-Rise Core; West/South-West Mixed Shophouse Core
+      const isFinancial = jx > 16 || jz < -125;
+      const isOfficeBldg = isFinancial ? (seedH % 5 !== 0) : (seedH % 3 === 0);
+      const kind = isOfficeBldg ? 'office' : 'housing';
+      const name = isOfficeBldg ? '商辦大樓' : '市中心住商大樓';
+      const floors = isOfficeBldg ? (9 + (seedH % 14)) : (5 + (seedH % 7));
+      const variant = isOfficeBldg ? (seedH % 5) : (seedH % 4);
+
+      building(name, kind, jx, jz, bw, bd, floors, variant);
+
+      // Attach 1F storefronts facing nearest cardinal direction
+      const facing = jz > -110 ? (jx > 0 ? 'W' : 'E') : (jz > -170 ? 'S' : 'N');
+      addGenericStreetStorefront(jx, jz, bw, bd, seedH % TAIWAN_LOCAL_SHOPS.length, facing);
+      if (seedH % 2 === 0) {
+        addGenericStreetStorefront(jx, jz, bw, bd, (seedH + 5) % TAIWAN_LOCAL_SHOPS.length, facing === 'S' ? 'E' : 'S');
       }
     }
   }
 
-  // The rail corridor divides the station block from the shopping district.
-  block('sidewalk', 36, .11, -103.5, 57, .22, 17);
-  park('站前綠地', 42, -57, 39, 33);
-  block('lawn', 36, .07, -80.5, 53, .14, 5.5);
-  block('sidewalk', 36, .12, -77.2, 53, .24, 1.4);
-  for (let x = 13; x < 63; x += 5) {
-    block('leaves', x, .42, -80.2, 3.65, .68, 1.04);
-  }
-  block('paving', 36, .29, -92.1, 50, .54, 3.9);
-  registerBoxCollider(36, .29, -92.1, 50, .54, 3.9, '車站月台', '#64748b', false);
-  block('yellow', 36, .57, -90.45, 50, .025, .14);
-  block('sidewalk', 36, 3.42, -93.25, 48, .23, 3.7);
-  for (const x of [16, 26, 36, 46, 56]) {
-    block('trim', x, 1.94, -94.4, .24, 2.95, .24);
-    registerBoxCollider(x, 1.94, -94.4, .24, 2.95, .24, '月台立柱', '#64748b', false);
-  }
-  registerBoxCollider(36, 3.42, -93.25, 48, .23, 3.7, '月台雨棚');
-  building('中央車站', 'civic', 36, -104, 45, 13, 1);
-  block('glass', 36, 4.95, -104, 44.6, 3.1, 12.7);
-  registerBoxCollider(36, 5.45, -104, 45.4, 4.1, 13.4, '中央車站上層', '#587385', false);
-  for (const side of [-1, 1]) {
-    const front = -104 + side * 6.43;
-    for (let x = 15; x <= 57; x += 3) {
-      block('trim', x, 4.95, front, .13, 3.1, .17);
-    }
-    block('trim', 36, 5.43, front, 44.8, .14, .16);
-    block('metalRoof', 36, 3.43, front + side * .62, 44.8, .26, 1.5);
-    block('concrete', 36, .25, front + side * 1.25, 19, .5, 2.2);
-    const stationSign = sign('中央車站', 36, 4.37, front + side * .17, 13, 1.6, '#285675');
-    if (side < 0) stationSign.rotation.y = Math.PI;
-  }
+  // Authentic Taiwanese 45-deg Chamfered Corner Buildings ("三角窗") near key hubs
+  chamferCornerBuilding('玉峰銀行', -22, -92, 10, 10, 1, -1, 5, 0);
+  chamferCornerBuilding('全臺電子', 22, -92, 10, 10, -1, -1, 4, 2);
+  chamferCornerBuilding('屈臣士', 22, -128, 10, 10, -1, 1, 5, 0);
+  chamferCornerBuilding('叮叮藥局', -22, -128, 10, 10, 1, 1, 4, 1);
 
-  // Curved roof with raised seams. The ridge runs along the railway.
-  function roofSection(halfWidth, rise, thickness) {
-    const shape = new THREE.Shape();
-    shape.moveTo(-halfWidth, 0);
-    shape.quadraticCurveTo(0, rise * 2, halfWidth, 0);
-    shape.lineTo(halfWidth, -thickness);
-    shape.quadraticCurveTo(0, rise * 2 - thickness, -halfWidth, -thickness);
-    shape.closePath();
-    return shape;
-  }
-  const roof = new THREE.Mesh(new THREE.ExtrudeGeometry(roofSection(7.2, 1.42, .22),
-    { depth: 46.8, bevelEnabled: false, curveSegments: 14 }), materials.metalRoof);
-  roof.position.set(12.6, 6.5, -104);
-  roof.rotation.y = Math.PI / 2;
-  roof.castShadow = roof.receiveShadow = true;
-  group.add(roof);
-  // Keep collision clearance close to the curved roof, with shorter boxes at its edges.
-  for (const [z, h, depth] of [[-104, 1.5, 5.2], [-108.85, 1.12, 4.5], [-99.15, 1.12, 4.5]]) {
-    registerBoxCollider(36, 6.5 + h / 2, z, 46.8, h, depth, '中央車站屋頂', '#587385', false);
-  }
-  const seam = new THREE.ExtrudeGeometry(roofSection(7.22, 1.47, .09),
-    { depth: .14, bevelEnabled: false, curveSegments: 14 });
-  const seams = new THREE.InstancedMesh(seam, materials.trim, 12);
-  const roofRotation = new THREE.Matrix4().makeRotationY(Math.PI / 2);
-  for (let i = 0; i < seams.count; i++) {
-    seams.setMatrixAt(i, roofRotation.setPosition(13.6 + i * 4, 6.5, -104));
-  }
-  seams.frustumCulled = false;
-  group.add(seams);
-  cityLandmarks.push({name:'中央車站', x:36, z:-105});
-  for (const x of [-108, -36, 108, 161]) {
-    if (x === -36) {
-      block('sidewalk', -37, .10, -57, 32, .20, 40);
-      building('街區住宅', 'housing', -41, -59, 22, 26, 6, 1);
-      building('街角店屋', 'civic', -24, -60, 9, 20, 2, 2);
-      block('metalRoof', -24, 3.22, -48.8, 9.4, .24, 2.6);
-      sign('站前商店', -24, 3.97, -49.91, 7.8, 1.25, '#8a4a32');
-    } else {
-      block('sidewalk', x, .10, -57, 33, .20, 40);
-      const variant = x === 108 ? 2 : 0;
-      building('街區住宅', 'housing', x, -57, 28, 28, 6, variant);
-    }
-  }
-
-  park('鄰里公園', -36, -4, 44, 26);
-  building('市區派出所', 'civic', 35, -4, 29, 19, 3);
-  sign('市區派出所', 35, 5.1, 5.6, 11, 1.8, '#344d79');
-  cityLandmarks.push({name:'市區派出所', x:35, z:-4});
-
-  // A small pedestrian square separates the flight pad from the first intersection.
+  // Pedestrian square around the Helipad
   block('paving', 0, .10, 0, 24, .20, 22);
   block('white', -10, .22, 0, .12, .018, 20);
   block('white', 10, .22, 0, .12, .018, 20);
-  cityLandmarks.push({name:'起降廣場', x:0, z:0}, {name:'騎樓商圈', x:0, z:-56}, {name:'商辦區', x:99, z:-217});
+  cityLandmarks.push({ name: '起降廣場', x: 0, z: 0 }, { name: '老街商圈', x: -56, z: -56 }, { name: '金融中心', x: 64, z: -156 });
+
+  // Instanced Taipei Roadside Street Trees along ALL Radial, Diagonal & Ring Boulevards
+  const treeSites = [];
+  NEW_ROAD_SEGMENTS.forEach(([x1, z1, x2, z2, rw]) => {
+    const dx = x2 - x1, dz = z2 - z1;
+    const len = Math.hypot(dx, dz);
+    const ux = dx / len, uz = dz / len;
+    const nx = -uz, nz = ux;
+    for (let d = 16; d < len - 14; d += 15) {
+      const px = x1 + ux * d, pz = z1 + uz * d;
+      if (Math.hypot(px, pz + 110) < 27) continue; // Keep Roundabout clear
+      if (Math.hypot(px, pz) < 18) continue;       // Keep Helipad clear
+      if (Math.abs(px) < 12 && pz > -85 && pz < -28) continue; // Keep market shophouses clear
+      for (const side of [-1, 1]) {
+        const tx = px + nx * side * (rw * 0.5 + 1.4);
+        const tz = pz + nz * side * (rw * 0.5 + 1.4);
+        if (isClearOfRoads(tx, tz, 0.8)) {
+          treeSites.push([tx, tz]);
+        }
+      }
+    }
+  });
+  if (treeSites.length > 0) {
+    const stTrunkGeo = new THREE.CylinderGeometry(0.14, 0.20, 2.7, 7);
+    const stCrownGeo = new THREE.DodecahedronGeometry(1.35, 1);
+    const stTrunks = new THREE.InstancedMesh(stTrunkGeo, materials.wood, treeSites.length);
+    const stCrowns = new THREE.InstancedMesh(stCrownGeo, materials.leaves, treeSites.length * 3);
+    const tt = new THREE.Object3D();
+    treeSites.forEach(([tx, tz], i) => {
+      block('concrete', tx, 0.19, tz, 1.25, 0.06, 1.25);
+      tt.position.set(tx, 1.5, tz);
+      tt.rotation.set(0, i * 0.7, 0);
+      tt.scale.set(1, 1, 1);
+      tt.updateMatrix();
+      stTrunks.setMatrixAt(i, tt.matrix);
+
+      const offsets = [[0, 3.35, 0, 1.05], [-0.55, 2.9, 0.35, 0.78], [0.55, 2.95, -0.35, 0.82]];
+      offsets.forEach(([ox, oy, oz, sc], j) => {
+        tt.position.set(tx + ox, oy, tz + oz);
+        tt.rotation.set(ox, i + j, oz);
+        tt.scale.set(sc, sc * 0.88, sc);
+        tt.updateMatrix();
+        stCrowns.setMatrixAt(i * 3 + j, tt.matrix);
+      });
+    });
+    stTrunks.castShadow = stTrunks.receiveShadow = true;
+    stCrowns.castShadow = stCrowns.receiveShadow = true;
+    stTrunks.frustumCulled = stCrowns.frustumCulled = false;
+    group.add(stTrunks, stCrowns);
+  }
 
   for (const [key, boxes] of batches) {
     const mesh = new THREE.InstancedMesh(cube, materials[key], boxes.length);
@@ -2000,7 +3187,7 @@ function* buildCity() {
       mesh.setMatrixAt(index, transform.matrix);
     });
     mesh.receiveShadow = true;
-    mesh.castShadow = ['wood', 'trim'].includes(key);
+    mesh.castShadow = ['wood', 'trim', 'concrete'].includes(key);
     // This bundled Three.js revision does not compute a batch-wide bound.
     mesh.frustumCulled = false;
     group.add(mesh);
@@ -2016,20 +3203,21 @@ function buildCityHelipad() {
 
   const padDisc = new THREE.Mesh(
     new THREE.CylinderGeometry(7.5, 7.8, 0.22, 32),
-    new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6 })
+    new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.86 })
   );
   padDisc.receiveShadow = true;
   padGroup.add(padDisc);
 
   const yellowRing = new THREE.Mesh(
     new THREE.RingGeometry(5.6, 6.2, 32),
-    new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide })
+    new THREE.MeshStandardMaterial({ color: 0xb88b3d, roughness: 0.88, side: THREE.DoubleSide })
   );
   yellowRing.rotation.x = -Math.PI / 2;
   yellowRing.position.y = 0.12;
+  yellowRing.receiveShadow = true;
   padGroup.add(yellowRing);
 
-  const hMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+  const hMat = new THREE.MeshStandardMaterial({ color: 0xd6d3cb, roughness: 0.88 });
   const hL = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.05, 4.5), hMat);
   hL.position.set(-1.6, 0.13, 0);
   const hR = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.05, 4.5), hMat);
@@ -2278,7 +3466,22 @@ function* buildTaiwanMarketStreet() {
     ctx.fillStyle = baseHex;
     ctx.fillRect(0, 0, 256, 256);
 
-    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    let tSeed = 919;
+    const tRand = () => {
+      tSeed = (Math.imul(1664525, tSeed) + 1013904223) >>> 0;
+      return tSeed / 4294967296;
+    };
+    for (let y = 0; y < 256; y += 16) {
+      const shift = (y / 16) % 2 === 0 ? 0 : 20;
+      for (let x = shift - 20; x < 256 + 40; x += 40) {
+        if (tRand() > 0.55) {
+          ctx.fillStyle = tRand() > 0.5 ? 'rgba(255,250,240,0.06)' : 'rgba(20,18,16,0.08)';
+          ctx.fillRect(x, y, 38, 14);
+        }
+      }
+    }
+
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
     for (let y = 0; y < 256; y += 16) {
       ctx.fillRect(0, y, 256, 2);
     }
@@ -2288,6 +3491,17 @@ function* buildTaiwanMarketStreet() {
         ctx.fillRect(x, y, 2, 16);
       }
     }
+
+    // Subtle rain grime streaks
+    for (let i = 0; i < 8; i++) {
+      const sx = tRand() * 256;
+      const g = ctx.createLinearGradient(0, 0, 0, 90 + tRand() * 140);
+      g.addColorStop(0, 'rgba(20,18,16,0.14)');
+      g.addColorStop(1, 'rgba(20,18,16,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(sx, 0, 4 + tRand() * 8, 256);
+    }
+
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(2, 2);
@@ -2300,35 +3514,35 @@ function* buildTaiwanMarketStreet() {
   // AUTHENTIC GOOGLE STREET VIEW TAIWANESE BRAND PAINTERS (量身打造，絕不套版)
   // --------------------------------------------------------------------------
   const TAIWAN_BRAND_REGISTRY = {
-    'bafang': { name: '八方雲集', sub: '鍋貼 • 水餃 專賣店', bg: '#f59e0b', fg: '#b91c1c', border: '#b91c1c', logo: '餃' },
-    'meiemei': { name: '早安美而美', sub: '中西式精緻活力早午餐', bg: '#ffffff', fg: '#15803d', border: '#b91c1c', logo: '美' },
-    'pxmart': { name: '全聯福利中心', sub: '買進美好生活 PX MART', bg: '#1d4ed8', fg: '#ffffff', border: '#ef4444', logo: 'PX' },
-    'elife': { name: '全國電子', sub: '揪甘心 3C 家電生活館', bg: '#dc2626', fg: '#ffffff', border: '#ffffff', logo: '全' },
-    'cosmed': { name: '康是美', sub: 'COSMED 藥妝美彩生活館', bg: '#ea580c', fg: '#ffffff', border: '#ea580c', logo: 'C' },
-    'sym': { name: 'SYM 三陽機車', sub: '專業維修 排氣定檢 買賣', bg: '#b91c1c', fg: '#ffffff', border: '#ffffff', logo: 'SYM' },
-    'dahu': { name: '大呼過癮', sub: '百元風味臭臭小火鍋', bg: '#eab308', fg: '#991b1b', border: '#991b1b', logo: '火' },
-    'chishang': { name: '池上木片便當', sub: '正宗池上米 現包快餐', bg: '#78350f', fg: '#fef08a', border: '#fef08a', logo: '米' },
-    'kobayashi': { name: '小林眼鏡', sub: '專業驗光配鏡 • 隱形眼鏡', bg: '#1e3a8a', fg: '#ffffff', border: '#60a5fa', logo: '鏡' },
-    'taian': { name: '台安藥局', sub: '健保特約 處方調劑 慢性病', bg: '#ffffff', fg: '#1d4ed8', border: '#16a34a', logo: '✚' },
-    'hardware': { name: '振宇五金', sub: '水電衛浴 五金工具 配件', bg: '#0284c7', fg: '#ffffff', border: '#facc15', logo: '五' },
-    'hongya': { name: '弘爺漢堡', sub: '美味活力早餐 連鎖專賣', bg: '#f97316', fg: '#ffffff', border: '#ffffff', logo: '弘' },
-    'showba': { name: '小北百貨', sub: '24H 生活五金 • 百貨批發', bg: '#facc15', fg: '#1e40af', border: '#dc2626', logo: '北' },
-    'shopee': { name: '蝦皮店到店', sub: '包裹寄取 便利生活取件門市', bg: '#ea580c', fg: '#ffffff', border: '#ffffff', logo: 'S' },
-    'louisa': { name: '路易莎咖啡', sub: 'Louisa Coffee 職人手沖', bg: '#2b1a11', fg: '#ea580c', border: '#ea580c', logo: 'L' },
-    'poya': { name: '寶雅 POYA', sub: 'POYA 美妝生活流行館', bg: '#f43f5e', fg: '#ffffff', border: '#ffffff', logo: 'P' },
-    'hilife': { name: '萊爾富', sub: 'Hi-Life 便利超商 24H', bg: '#dc2626', fg: '#ffffff', border: '#fbbf24', logo: 'Hi' },
-    'chunghwa': { name: '中華電信', sub: '中華電信 5G 行動門市', bg: '#0284c7', fg: '#ffffff', border: '#ffffff', logo: '中' },
-    'fried_chicken': { name: '台灣第一家鹽酥雞', sub: '特製胡椒鹽 宵夜第一首選', bg: '#991b1b', fg: '#fef08a', border: '#fef08a', logo: '雞' },
-    'bubble_tea': { name: '麻古茶坊', sub: 'MACU 芝芝鮮果飲專賣', bg: '#dc2626', fg: '#ffffff', border: '#fef08a', logo: '茶' },
-    'dintaifung': { name: '鼎泰豐', sub: '黃金十八摺小籠包點心', bg: '#7f1d1d', fg: '#fef08a', border: '#fef08a', logo: '鼎' },
-    'beef_soup': { name: '阿宗麵線', sub: '萬華老店 柴魚大腸麵線', bg: '#78350f', fg: '#ffffff', border: '#f59e0b', logo: '麵' },
-    'braised_pork': { name: '鬍鬚張魯肉飯', sub: '正宗經典 台灣魯肉便當', bg: '#eab308', fg: '#991b1b', border: '#991b1b', logo: '張' },
-    'sanma': { name: '三媽臭臭鍋', sub: '正宗平價 百元風味臭臭鍋', bg: '#b91c1c', fg: '#ffffff', border: '#facc15', logo: '三' },
-    'four_seas': { name: '四海遊龍', sub: '鍋貼水餃 專賣名店', bg: '#ea580c', fg: '#ffffff', border: '#ffffff', logo: '龍' },
-    'kebuke': { name: '可不可熟成紅茶', sub: '熟成純茶 • 冷飲專賣', bg: '#064e3b', fg: '#d1fae5', border: '#d97706', logo: '渴' },
-    'mwd': { name: '麥味登', sub: 'My Warm Day 溫暖早午餐', bg: '#15803d', fg: '#ffffff', border: '#ffffff', logo: '麥' },
-    'yamaha': { name: '山葉機車', sub: 'YAMAHA 專業保修定檢', bg: '#1d4ed8', fg: '#ffffff', border: '#ef4444', logo: 'Y' },
-    'yifang': { name: '一芳水果茶', sub: '傳承古法 台灣水果茶專賣', bg: '#78350f', fg: '#fef08a', border: '#f59e0b', logo: '芳' }
+    'bafang': { name: '四方雲集', sub: '鍋貼 • 水餃 專賣店', bg: '#e69908', fg: '#991b1b', border: '#991b1b', logo: '餃' },
+    'meiemei': { name: '早安美又美', sub: '中西式精緻活力早午餐', bg: '#f5f3ee', fg: '#15803d', border: '#b91c1c', logo: '美' },
+    'pxmart': { name: '全民福利中心', sub: '買進美好生活 QM MART', bg: '#1e40af', fg: '#ffffff', border: '#dc2626', logo: 'QM' },
+    'elife': { name: '全臺電子', sub: '足感心 3C 家電生活館', bg: '#c81e1e', fg: '#ffffff', border: '#f8fafc', logo: '全' },
+    'cosmed': { name: '康是好', sub: 'COSGOOD 藥妝美彩生活館', bg: '#d94e0c', fg: '#ffffff', border: '#fed7aa', logo: 'C' },
+    'sym': { name: 'SYK 三洋機車', sub: '專業維修 排氣定檢 買賣', bg: '#991b1b', fg: '#ffffff', border: '#f8fafc', logo: 'SYK' },
+    'dahu': { name: '大喊過癮', sub: '百元風味臭臭小火鍋', bg: '#d9a406', fg: '#7f1d1d', border: '#7f1d1d', logo: '火' },
+    'chishang': { name: '池下木片便當', sub: '正宗池下米 現包快餐', bg: '#6b2f0e', fg: '#fef08a', border: '#fef08a', logo: '米' },
+    'kobayashi': { name: '大林眼鏡', sub: '專業驗光配鏡 • 隱形眼鏡', bg: '#1e3a8a', fg: '#ffffff', border: '#60a5fa', logo: '鏡' },
+    'taian': { name: '台康藥局', sub: '健保特約 處方調劑 慢性病', bg: '#f5f3ee', fg: '#1d4ed8', border: '#16a34a', logo: '✚' },
+    'hardware': { name: '振華五金', sub: '水電衛浴 五金工具 配件', bg: '#0369a1', fg: '#ffffff', border: '#facc15', logo: '華' },
+    'hongya': { name: '弘叔漢堡', sub: '美味活力早餐 連鎖專賣', bg: '#ea580c', fg: '#ffffff', border: '#ffffff', logo: '弘' },
+    'showba': { name: '小南百貨', sub: '24H 生活五金 • 百貨批發', bg: '#eab308', fg: '#1e3a8a', border: '#b91c1c', logo: '南' },
+    'shopee': { name: '蝦殼店到店', sub: '包裹寄取 便利生活取件門市', bg: '#dc4e0c', fg: '#ffffff', border: '#ffffff', logo: 'S' },
+    'louisa': { name: '露易莎咖啡', sub: 'Louisa Style 職人手沖', bg: '#2b1a11', fg: '#ea580c', border: '#ea580c', logo: 'L' },
+    'poya': { name: '寶亞 BOYA', sub: 'BOYA 美妝生活流行館', bg: '#e11d48', fg: '#ffffff', border: '#ffffff', logo: 'B' },
+    'hilife': { name: '來爾富', sub: 'Hi-Day 便利超商 24H', bg: '#c81e1e', fg: '#ffffff', border: '#fbbf24', logo: 'Hi' },
+    'chunghwa': { name: '中台電信', sub: '中台電信 5G 行動門市', bg: '#0369a1', fg: '#ffffff', border: '#ffffff', logo: '中' },
+    'fried_chicken': { name: '台灣第一攤鹽酥雞', sub: '特製胡椒鹽 宵夜第一首選', bg: '#991b1b', fg: '#fef08a', border: '#fef08a', logo: '雞' },
+    'bubble_tea': { name: '麻吉茶坊', sub: 'MAJI 芝芝鮮果飲專賣', bg: '#c81e1e', fg: '#ffffff', border: '#fef08a', logo: '茶' },
+    'dintaifung': { name: '鼎泰隆', sub: '黃金十八摺小籠包點心', bg: '#7f1d1d', fg: '#fef08a', border: '#fef08a', logo: '鼎' },
+    'beef_soup': { name: '阿忠麵線', sub: '萬華老店 柴魚大腸麵線', bg: '#6b2f0e', fg: '#ffffff', border: '#f59e0b', logo: '麵' },
+    'braised_pork': { name: '鬍鬚王魯肉飯', sub: '正宗經典 台灣魯肉便當', bg: '#d9a406', fg: '#7f1d1d', border: '#7f1d1d', logo: '王' },
+    'sanma': { name: '三姨臭臭鍋', sub: '正宗平價 百元風味臭臭鍋', bg: '#991b1b', fg: '#ffffff', border: '#facc15', logo: '三' },
+    'four_seas': { name: '五湖遊龍', sub: '鍋貼水餃 專賣名店', bg: '#d94e0c', fg: '#ffffff', border: '#ffffff', logo: '龍' },
+    'kebuke': { name: '可以喝熟成紅茶', sub: '熟成純茶 • 冷飲專賣', bg: '#064e3b', fg: '#d1fae5', border: '#d97706', logo: '喝' },
+    'mwd': { name: '麥味香', sub: 'My Warm Bistro 溫暖早午餐', bg: '#15803d', fg: '#ffffff', border: '#ffffff', logo: '麥' },
+    'yamaha': { name: '山野機車', sub: 'YAMADA 專業保修定檢', bg: '#1e40af', fg: '#ffffff', border: '#ef4444', logo: 'Y' },
+    'yifang': { name: '二芳水果茶', sub: '傳承古法 台灣水果茶專賣', bg: '#6b2f0e', fg: '#fef08a', border: '#f59e0b', logo: '芳' }
   };
 
   function drawTaiwanBrandSign(ctx, brandKey, isVertical, width, height) {
@@ -2336,73 +3550,73 @@ function* buildTaiwanMarketStreet() {
 
     if (brandKey === '7eleven') {
       if (isVertical) {
-        // 7-ELEVEN 直立側招 (白底大7 + 綠底白字 + 橘底24H)
-        ctx.fillStyle = '#ffffff';
+        // 8-TWELVE 直立側招 (白底大8 + 綠底白字 + 橘底24H)
+        ctx.fillStyle = '#f8fafc';
         ctx.fillRect(0, 0, width, height * 0.44);
 
         const centerX = width / 2;
-        ctx.fillStyle = '#008136';
-        ctx.font = '900 110px "Arial Black", "Impact", sans-serif';
+        ctx.fillStyle = '#007a33';
+        ctx.font = '900 108px "Arial Black", "Impact", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('7', centerX, height * 0.21);
+        ctx.fillText('8', centerX, height * 0.21);
 
-        ctx.fillStyle = '#F58220';
-        ctx.fillRect(16, height * 0.21 - 12, width - 32, 24);
+        ctx.fillStyle = '#ea7317';
+        ctx.fillRect(14, height * 0.21 - 12, width - 28, 24);
         ctx.fillStyle = '#ffffff';
-        ctx.font = '900 16px "Arial Black", sans-serif';
-        ctx.fillText('ELEVEN', centerX, height * 0.21);
+        ctx.font = '900 15px "Arial Black", sans-serif';
+        ctx.fillText('TWELVE', centerX, height * 0.21);
 
-        ctx.fillStyle = '#008136';
+        ctx.fillStyle = '#007a33';
         ctx.fillRect(0, height * 0.44, width, height * 0.56);
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = '900 36px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
-        ctx.fillText('７', centerX, height * 0.52);
-        ctx.fillText('E', centerX, height * 0.59);
-        ctx.fillText('L', centerX, height * 0.66);
+        ctx.font = '900 34px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+        ctx.fillText('８', centerX, height * 0.52);
+        ctx.fillText('T', centerX, height * 0.59);
+        ctx.fillText('W', centerX, height * 0.66);
         ctx.fillText('E', centerX, height * 0.73);
-        ctx.fillText('V', centerX, height * 0.80);
-        ctx.fillText('E', centerX, height * 0.87);
-        ctx.fillText('N', centerX, height * 0.94);
+        ctx.fillText('L', centerX, height * 0.80);
+        ctx.fillText('V', centerX, height * 0.87);
+        ctx.fillText('E', centerX, height * 0.94);
 
-        ctx.fillStyle = '#F58220';
+        ctx.fillStyle = '#ea7317';
         ctx.fillRect(10, height - 32, width - 20, 24);
         ctx.fillStyle = '#ffffff';
         ctx.font = '900 18px "Arial Black", sans-serif';
         ctx.fillText('24H', centerX, height - 20);
       } else {
-        // 7-ELEVEN 門面大橫招
-        ctx.fillStyle = '#ffffff';
+        // 8-TWELVE 門面大橫招
+        ctx.fillStyle = '#f8fafc';
         ctx.fillRect(0, 0, width, height);
 
-        ctx.fillStyle = '#F58220';
+        ctx.fillStyle = '#ea7317';
         ctx.fillRect(0, 0, width, 22);
 
-        ctx.fillStyle = '#008136';
+        ctx.fillStyle = '#007a33';
         ctx.fillRect(0, height - 22, width, 22);
 
         const midY = height / 2;
-        ctx.fillStyle = '#008136';
-        ctx.font = '900 84px "Arial Black", sans-serif';
+        ctx.fillStyle = '#007a33';
+        ctx.font = '900 82px "Arial Black", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('7', 95, midY);
+        ctx.fillText('8', 95, midY);
 
-        ctx.fillStyle = '#F58220';
-        ctx.fillRect(45, midY - 9, 100, 18);
+        ctx.fillStyle = '#ea7317';
+        ctx.fillRect(42, midY - 9, 106, 18);
         ctx.fillStyle = '#ffffff';
         ctx.font = '900 13px "Arial Black", sans-serif';
-        ctx.fillText('ELEVEN', 95, midY);
+        ctx.fillText('TWELVE', 95, midY);
 
-        ctx.fillStyle = '#008136';
+        ctx.fillStyle = '#007a33';
         ctx.font = '900 44px "Microsoft JhengHei", sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('統一超商', 170, midY - 6);
+        ctx.fillText('統二超商', 170, midY - 6);
 
         ctx.font = 'bold 20px "Microsoft JhengHei", sans-serif';
-        ctx.fillStyle = '#E51B24';
-        ctx.fillText('OPEN!', 360, midY - 6);
+        ctx.fillStyle = '#dc2626';
+        ctx.fillText('8-12', 360, midY - 6);
 
         ctx.fillStyle = '#475569';
         ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
@@ -2410,24 +3624,24 @@ function* buildTaiwanMarketStreet() {
       }
     } else if (brandKey === 'familymart') {
       if (isVertical) {
-        // 全家 FamilyMart 直立側招 (藍白綠經典三色)
-        ctx.fillStyle = '#0090D7';
+        // 我家便利商店 OurMart 直立側招 (藍白綠經典三色)
+        ctx.fillStyle = '#0086c9';
         ctx.fillRect(0, 0, width, height * 0.28);
         ctx.fillStyle = '#ffffff';
         ctx.font = '900 24px "Arial Black", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('Family', width / 2, height * 0.11);
+        ctx.fillText('Our', width / 2, height * 0.11);
         ctx.fillText('Mart', width / 2, height * 0.19);
 
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = '#f8fafc';
         ctx.fillRect(0, height * 0.28, width, height * 0.34);
-        ctx.fillStyle = '#0090D7';
+        ctx.fillStyle = '#0086c9';
         ctx.font = '900 36px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('全', width / 2, height * 0.38);
+        ctx.fillText('我', width / 2, height * 0.38);
         ctx.fillText('家', width / 2, height * 0.50);
 
-        ctx.fillStyle = '#00A040';
+        ctx.fillStyle = '#00963b';
         ctx.fillRect(0, height * 0.62, width, height * 0.38);
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 26px "Microsoft JhengHei", sans-serif';
@@ -2438,32 +3652,32 @@ function* buildTaiwanMarketStreet() {
         ctx.font = '900 18px "Arial Black", sans-serif';
         ctx.fillText('24H', width / 2, height * 0.94);
       } else {
-        // 全家門面大橫招
+        // 我家便利商店門面大橫招
         const h3 = height / 3;
-        ctx.fillStyle = '#0090D7';
+        ctx.fillStyle = '#0086c9';
         ctx.fillRect(0, 0, width, h3);
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = '#f8fafc';
         ctx.fillRect(0, h3, width, h3);
-        ctx.fillStyle = '#00A040';
+        ctx.fillStyle = '#00963b';
         ctx.fillRect(0, h3 * 2, width, h3);
 
         ctx.fillStyle = '#003366';
         ctx.font = '900 36px "Arial Black", sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText('FamilyMart', 30, height / 2);
+        ctx.fillText('OurMart', 30, height / 2);
 
         ctx.fillStyle = '#ffffff';
         ctx.font = '900 24px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('全家便利商店', 30, h3 * 2 + h3 / 2);
+        ctx.fillText('我家便利商店', 30, h3 * 2 + h3 / 2);
 
         ctx.font = 'bold 18px "Microsoft JhengHei", sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText("Let's Café 鮮食甜點・Fami!ce 霜淇淋", width - 30, height / 2);
+        ctx.fillText("Our Café 鮮食甜點・現擠霜淇淋", width - 30, height / 2);
       }
     } else if (brandKey === '50lan') {
-      // ５０嵐：亮黃底 + 海軍藍圓圈與粗字
-      ctx.fillStyle = '#FFD100';
+      // ６０嵐：亮黃底 + 海軍藍圓圈與粗字
+      ctx.fillStyle = '#f5c400';
       ctx.fillRect(0, 0, width, height);
 
       if (isVertical) {
@@ -2477,7 +3691,7 @@ function* buildTaiwanMarketStreet() {
         ctx.font = '900 48px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('５０', width / 2, 70);
+        ctx.fillText('６０', width / 2, 70);
         ctx.fillText('嵐', width / 2, 115);
 
         ctx.font = '900 38px "Microsoft JhengHei", sans-serif';
@@ -2500,17 +3714,17 @@ function* buildTaiwanMarketStreet() {
         ctx.font = '900 44px "Microsoft JhengHei", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('５０嵐', 90, height / 2);
+        ctx.fillText('６０嵐', 90, height / 2);
 
         ctx.textAlign = 'left';
         ctx.font = '900 46px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('５０嵐 鮮茶專賣', 175, height / 2 - 14);
+        ctx.fillText('６０嵐 鮮茶專賣', 175, height / 2 - 14);
 
         ctx.font = 'bold 22px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('KOI Thé 官方連鎖｜四季春青茶・波霸奶茶・燕麥紅茶拿鐵', 175, height / 2 + 28);
+        ctx.fillText('KOY Thé 連鎖茶飲｜四季春青茶・波霸奶茶・紅茶拿鐵', 175, height / 2 + 28);
       }
     } else if (brandKey === 'chingshin') {
-      // 清心福全：深墨綠 + 紅心 + 白楷書
+      // 清心福泉：深墨綠 + 紅心 + 白楷書
       ctx.fillStyle = '#0D5B36';
       ctx.fillRect(0, 0, width, height);
 
@@ -2528,7 +3742,7 @@ function* buildTaiwanMarketStreet() {
         ctx.fillText('清', width / 2, 135);
         ctx.fillText('心', width / 2, 205);
         ctx.fillText('福', width / 2, 275);
-        ctx.fillText('全', width / 2, 345);
+        ctx.fillText('泉', width / 2, 345);
 
         ctx.font = 'bold 22px "Microsoft JhengHei", sans-serif';
         ctx.fillText('冷飲特約', width / 2, 420);
@@ -2547,14 +3761,14 @@ function* buildTaiwanMarketStreet() {
 
         ctx.textAlign = 'left';
         ctx.font = '900 50px "Microsoft JhengHei", "DFKai-SB", sans-serif';
-        ctx.fillText('清 心 福 全', 135, height / 2 - 12);
+        ctx.fillText('清 心 福 泉', 135, height / 2 - 12);
 
         ctx.font = 'bold 22px "Microsoft JhengHei", sans-serif';
         ctx.fillText('冷飲站特約專賣店｜特級烏龍綠茶・珍珠奶茶・優多綠茶', 135, height / 2 + 30);
       }
     } else if (brandKey === 'lottery') {
-      // 台灣彩券：金黃底 + 紅太極標 + 紅字
-      ctx.fillStyle = '#FFB800';
+      // 台彩樂透：金黃底 + 紅圓標 + 紅字
+      ctx.fillStyle = '#e5a800';
       ctx.fillRect(0, 0, width, height);
 
       if (isVertical) {
@@ -2567,9 +3781,9 @@ function* buildTaiwanMarketStreet() {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('台', width / 2, 145);
-        ctx.fillText('灣', width / 2, 215);
-        ctx.fillText('彩', width / 2, 285);
-        ctx.fillText('券', width / 2, 355);
+        ctx.fillText('彩', width / 2, 215);
+        ctx.fillText('樂', width / 2, 285);
+        ctx.fillText('透', width / 2, 355);
 
         ctx.fillStyle = '#1D4ED8';
         ctx.fillRect(15, 410, width - 30, 32);
@@ -2716,8 +3930,8 @@ function* buildTaiwanMarketStreet() {
         ctx.fillText('24H 營業｜小籠湯包・手工燒餅夾蛋・香脆油條・香濃現磨豆漿米漿', 40, height / 2 + 28);
       }
     } else if (brandKey === 'kymco') {
-      // 光陽機車：白底 + 紅色 KYMCO 斜體 + 藍色光陽機車
-      ctx.fillStyle = '#ffffff';
+      // 光明機車：白底 + 紅色 KYMKO 斜體 + 藍色光明機車
+      ctx.fillStyle = '#f8fafc';
       ctx.fillRect(0, 0, width, height);
 
       ctx.fillStyle = '#DC2626';
@@ -2728,12 +3942,12 @@ function* buildTaiwanMarketStreet() {
         ctx.font = '900 32px "Arial Black", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('KYMCO', width / 2, 55);
+        ctx.fillText('KYMKO', width / 2, 55);
 
         ctx.fillStyle = '#0B3B60';
         ctx.font = '900 42px "Microsoft JhengHei", sans-serif';
         ctx.fillText('光', width / 2, 130);
-        ctx.fillText('陽', width / 2, 195);
+        ctx.fillText('明', width / 2, 195);
         ctx.fillText('機', width / 2, 260);
         ctx.fillText('車', width / 2, 325);
 
@@ -2746,19 +3960,19 @@ function* buildTaiwanMarketStreet() {
         ctx.font = '900 46px "Arial Black", sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText('KYMCO', 40, height / 2);
+        ctx.fillText('KYMKO', 40, height / 2);
 
         ctx.fillStyle = '#0B3B60';
         ctx.font = '900 46px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('光陽機車特約店', 260, height / 2 - 12);
+        ctx.fillText('光明機車特約店', 260, height / 2 - 12);
 
         ctx.fillStyle = '#475569';
         ctx.font = 'bold 20px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('原廠專業噴射引擎保修・電腦排氣檢驗站・道路救援服務', 260, height / 2 + 28);
+        ctx.fillText('專業噴射引擎保修・電腦排氣檢驗站・道路救援服務', 260, height / 2 + 28);
       }
     } else if (brandKey === 'watsons') {
-      // 屈臣氏：湖水藍（#00838F）+ 白字
-      ctx.fillStyle = '#00838F';
+      // 屈臣士：湖水藍（#00838F）+ 白字
+      ctx.fillStyle = '#007a85';
       ctx.fillRect(0, 0, width, height);
 
       if (isVertical) {
@@ -2766,12 +3980,12 @@ function* buildTaiwanMarketStreet() {
         ctx.font = '900 28px "Arial", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('watsons', width / 2, 45);
+        ctx.fillText('watso', width / 2, 45);
 
         ctx.font = '900 44px "Microsoft JhengHei", sans-serif';
         ctx.fillText('屈', width / 2, 125);
         ctx.fillText('臣', width / 2, 195);
-        ctx.fillText('氏', width / 2, 265);
+        ctx.fillText('士', width / 2, 265);
 
         ctx.fillStyle = '#10B981';
         ctx.fillRect(width / 2 - 8, 335, 16, 44);
@@ -2786,10 +4000,10 @@ function* buildTaiwanMarketStreet() {
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.font = '900 44px "Arial", sans-serif';
-        ctx.fillText('watsons', 40, height / 2);
+        ctx.fillText('watso', 40, height / 2);
 
         ctx.font = '900 44px "Microsoft JhengHei", sans-serif';
-        ctx.fillText('屈臣氏 健保藥局', 250, height / 2 - 12);
+        ctx.fillText('屈臣士 健保藥局', 250, height / 2 - 12);
 
         ctx.font = 'bold 20px "Microsoft JhengHei", sans-serif';
         ctx.fillStyle = '#E0F2FE';
@@ -2972,10 +4186,10 @@ function* buildTaiwanMarketStreet() {
 
     const mat = new THREE.MeshStandardMaterial({
       map: texture,
-      roughness: 0.35,
-      metalness: 0.08,
+      roughness: 0.42,
+      metalness: 0.06,
       emissive: emissiveColor,
-      emissiveIntensity: state.timeOfDay === 'night' ? 1.85 : state.timeOfDay === 'sunset' ? 0.9 : 0.22,
+      emissiveIntensity: state.timeOfDay === 'night' ? 1.65 : state.timeOfDay === 'sunset' ? 0.75 : 0.04,
       side: THREE.DoubleSide
     });
     signMaterials.set(key, mat);
@@ -2983,126 +4197,127 @@ function* buildTaiwanMarketStreet() {
     return mat;
   }
 
-  // AC Outdoor Unit Texture
-  function createAcTex() {
+  // 4 Distinct Taiwanese AC Outdoor Unit Styles/Brands (日立/大金/雙風扇商業機/舊化禾聯)
+  function createAcMat(style) {
     const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 96;
+    canvas.width = 160;
+    canvas.height = style === 2 ? 180 : 110;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#e2e8f0';
-    ctx.fillRect(0, 0, 128, 96);
 
-    ctx.fillStyle = '#334155';
-    ctx.beginPath();
-    ctx.arc(88, 48, 34, 0, Math.PI * 2);
-    ctx.fill();
+    const bodyColors = ['#e7e5e0', '#d4d8dd', '#cbd2d9', '#dcd6c6'];
+    ctx.fillStyle = bodyColors[style % 4];
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.strokeStyle = '#94a3b8';
-    ctx.lineWidth = 4;
-    for (let r = 8; r <= 28; r += 7) {
-      ctx.beginPath();
-      ctx.arc(88, 48, r, 0, Math.PI * 2);
-      ctx.stroke();
+    // Top weather grime & panel seam
+    const topGrime = ctx.createLinearGradient(0, 0, 0, 18);
+    topGrime.addColorStop(0, 'rgba(30, 28, 26, 0.25)');
+    topGrime.addColorStop(1, 'rgba(30, 28, 26, 0)');
+    ctx.fillStyle = topGrime;
+    ctx.fillRect(0, 0, canvas.width, 18);
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.22)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+    // Brand badge on left panel
+    const badges = [
+      { bg: '#b91c1c', fg: '#ffffff', txt: 'HITAC' },
+      { bg: '#0284c7', fg: '#ffffff', txt: 'DAIKN' },
+      { bg: '#0f766e', fg: '#ffffff', txt: 'PANAS' },
+      { bg: '#334155', fg: '#facc15', txt: 'HERON' }
+    ][style % 4];
+    ctx.fillStyle = badges.bg;
+    ctx.fillRect(10, 14, 34, 12);
+    ctx.fillStyle = badges.fg;
+    ctx.font = 'bold 8px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badges.txt, 27, 20);
+
+    // Side heat-sink louvers
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+    for (let ly = 36; ly < canvas.height - 14; ly += 6) {
+      ctx.fillRect(10, ly, 32, 3);
     }
+
+    // Fan grille(s)
+    const fanCenters = style === 2 ? [[104, 50], [104, 130]] : [[104, 55]];
+    fanCenters.forEach(([fx, fy]) => {
+      ctx.fillStyle = '#1e293b';
+      ctx.beginPath();
+      ctx.arc(fx, fy, 36, 0, Math.PI * 2);
+      ctx.fill();
+      // Fan blades silhouette
+      ctx.fillStyle = '#334155';
+      for (let b = 0; b < 3; b++) {
+        ctx.save();
+        ctx.translate(fx, fy);
+        ctx.rotate(b * (Math.PI * 2 / 3) + style);
+        ctx.fillRect(-5, -30, 10, 28);
+        ctx.restore();
+      }
+      // Protective wire mesh
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 2;
+      for (let r = 9; r <= 32; r += 7) {
+        ctx.beginPath();
+        ctx.arc(fx, fy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(fx - 34, fy); ctx.lineTo(fx + 34, fy);
+      ctx.moveTo(fx, fy - 34); ctx.lineTo(fx, fy + 34);
+      ctx.stroke();
+    });
+
     const tex = new THREE.CanvasTexture(canvas);
     tex.encoding = THREE.sRGBEncoding;
-    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55 });
+    return new THREE.MeshStandardMaterial({ map: tex, bumpMap: tex, bumpScale: 0.03, roughness: 0.55 });
   }
-  const acMat = createAcTex();
+  const acMats = [0, 1, 2, 3].map(createAcMat);
 
   // --------------------------------------------------------------------------
   // The Famous Taiwanese Shophouse Directory (中央大道台灣代表性店家清單)
   // --------------------------------------------------------------------------
   const taiwanShops = [
-    // --- 1. Avenue 0 South & Helipad Approach (z = 21 to -67) ---
-    { side: -1, z: 21, h: 8.2, wall: '#c5bcaf', brand: 'hongya', emissive: '#F97316', name: '弘爺漢堡 起飛坪店', roofType: 'parapet' },
-    { side: 1, z: 21, h: 7.6, wall: '#bcc5bd', brand: 'meiemei', emissive: '#15803D', name: '早安美而美 起飛坪店', roofType: 'parapet' },
-    { side: -1, z: 9, h: 8.5, wall: '#b9c1c4', brand: 'shopee', emissive: '#EA580C', name: '蝦皮店到店 門市', roofType: 'tin_green' },
-    { side: 1, z: 9, h: 8.0, wall: '#c4b8ad', brand: 'showba', emissive: '#FACC15', name: '小北百貨 24H', roofType: 'parapet' },
-    { side: -1, z: -3, h: 7.8, wall: '#cfc4b6', brand: 'hilife', emissive: '#DC2626', name: '萊爾富 Hi-Life', roofType: 'parapet' },
-    { side: 1, z: -3, h: 8.2, wall: '#bfb5a8', brand: 'cosmed', emissive: '#EA580C', name: '康是美 COSMED', roofType: 'tin_blue' },
-    { side: -1, z: -19, h: 8.5, wall: '#c8bfb0', brand: '7eleven', emissive: '#008136', name: '７-ELEVEN 統一超商', roofType: 'parapet' },
-    { side: 1, z: -19, h: 7.8, wall: '#b8c0ba', brand: '50lan', emissive: '#FFD100', name: '５０嵐 鮮茶專賣', roofType: 'parapet' },
-    { side: -1, z: -31, h: 8.8, wall: '#b6bec1', brand: 'beef_noodles', emissive: '#7F1D1D', name: '台灣正宗牛肉麵', roofType: 'tin_green' },
-    { side: 1, z: -31, h: 8.0, wall: '#c2b8ad', brand: 'pork_rib', emissive: '#EA580C', name: '正忠排骨便當', roofType: 'parapet' },
-    { side: -1, z: -43, h: 7.5, wall: '#c9bca9', brand: 'chingshin', emissive: '#0D5B36', name: '清心福全 冷飲站', roofType: 'parapet' },
-    { side: 1, z: -43, h: 8.2, wall: '#bfb5a8', brand: 'lottery', emissive: '#FFB800', name: '台灣彩券', roofType: 'tin_blue' },
-    { side: -1, z: -55, h: 8.5, wall: '#b8aca5', brand: 'familymart', emissive: '#0090D7', name: '全家便利商店', roofType: 'parapet' },
-    { side: 1, z: -55, h: 7.6, wall: '#b2c0ba', brand: 'kymco', emissive: '#DC2626', name: '光陽機車 KYMCO', roofType: 'parapet' },
-    { side: -1, z: -67, h: 8.0, wall: '#cfc4b6', brand: 'soy_milk', emissive: '#F59E0B', name: '永和豆漿大王', roofType: 'parapet' },
-    { side: 1, z: -67, h: 8.2, wall: '#cbbdae', brand: 'bubble_tea', emissive: '#DC2626', name: '麻古茶坊 MACU', roofType: 'parapet' },
+    // --- 1. Central Blvd South (起降廣場北側騎樓商圈: z = -38 to -76) ---
+    { side: -1, z: -38, h: 8.8, wall: '#b6bec1', brand: 'beef_noodles', emissive: '#7F1D1D', name: '台灣正宗牛肉麵', roofType: 'tin_green' },
+    { side: 1, z: -38, h: 8.0, wall: '#c2b8ad', brand: 'pork_rib', emissive: '#EA580C', name: '正忠排骨便當', roofType: 'parapet' },
+    { side: -1, z: -50, h: 7.8, wall: '#c9bca9', brand: 'chingshin', emissive: '#0D5B36', name: '清心福全 冷飲站', roofType: 'parapet' },
+    { side: 1, z: -50, h: 8.2, wall: '#bfb5a8', brand: 'lottery', emissive: '#FFB800', name: '台灣彩券', roofType: 'tin_blue' },
+    { side: -1, z: -62, h: 8.5, wall: '#b8aca5', brand: 'familymart', emissive: '#0090D7', name: '我家便利商店', roofType: 'parapet' },
+    { side: 1, z: -62, h: 7.8, wall: '#b2c0ba', brand: 'kymco', emissive: '#DC2626', name: '光明機車 KYMKO', roofType: 'parapet' },
+    { side: -1, z: -74, h: 8.2, wall: '#cfc4b6', brand: '7eleven', emissive: '#008136', name: '8-TWELVE 統二超商', roofType: 'parapet' },
+    { side: 1, z: -74, h: 8.0, wall: '#cbbdae', brand: '50lan', emissive: '#FFD100', name: '60嵐 鮮茶專賣', roofType: 'parapet' },
 
-    // --- 2. Avenue 0 Mid (Station Front: z = -99 to -111) ---
-    { side: -1, z: -99, h: 8.8, wall: '#cad0d3', brand: 'watsons', emissive: '#00838F', name: '屈臣氏 Watsons', roofType: 'parapet' },
-    { side: 1, z: -99, h: 8.2, wall: '#cbbdae', brand: 'tainan_beef', emissive: '#FACC15', name: '台南溫體牛肉湯', roofType: 'tin_blue' },
-    { side: -1, z: -111, h: 8.0, wall: '#bab5a8', brand: 'claw_machine', emissive: '#EC4899', name: '24H 夾娃娃旗艦店', roofType: 'parapet' },
-    { side: 1, z: -111, h: 8.5, wall: '#c8bfb0', brand: 'braised_pork', emissive: '#EAB308', name: '鬍鬚張魯肉飯', roofType: 'parapet' },
+    // --- 2. East Commercial Avenue (東側商業大道: z = -124.5 & -95.5, x = 36 to 108) ---
+    { x: 36, z: -124.5, rotY: 0, h: 8.8, wall: '#b6bec1', brand: 'pxmart', emissive: '#1D4ED8', name: '全民福利中心 商業店', roofType: 'parapet' },
+    { x: 48, z: -124.5, rotY: 0, h: 8.2, wall: '#c2b8ad', brand: 'elife', emissive: '#DC2626', name: '全臺電子 足感心', roofType: 'parapet' },
+    { x: 60, z: -124.5, rotY: 0, h: 7.8, wall: '#c9bca9', brand: 'sym', emissive: '#B91C1C', name: 'SYK 三洋機車', roofType: 'parapet' },
+    { x: 72, z: -124.5, rotY: 0, h: 8.0, wall: '#bfb5a8', brand: 'dahu', emissive: '#EAB308', name: '大喊過癮 臭臭鍋', roofType: 'tin_blue' },
+    { x: 84, z: -124.5, rotY: 0, h: 8.5, wall: '#b8aca5', brand: 'chishang', emissive: '#78350F', name: '池下木片便當', roofType: 'parapet' },
+    { x: 96, z: -124.5, rotY: 0, h: 8.0, wall: '#b2c0ba', brand: 'kobayashi', emissive: '#1E3A8A', name: '大林眼鏡 商業店', roofType: 'parapet' },
+    { x: 108, z: -124.5, rotY: 0, h: 8.2, wall: '#cfc4b6', brand: 'taian', emissive: '#16A34A', name: '台康藥局 商業店', roofType: 'parapet' },
 
-    // --- 3. Street -120 North Side (Gate 3 -> Gate 4: facing South, rotY: 0, z: -133.9) ---
-    { x: -36, z: -133.9, rotY: 0, h: 8.5, wall: '#c5bcaf', brand: 'bafang', emissive: '#F59E0B', name: '八方雲集 車站店', roofType: 'parapet' },
-    { x: -24, z: -133.9, rotY: 0, h: 7.8, wall: '#b8c0ba', brand: 'fried_chicken', emissive: '#B91C1C', name: '台灣第一家鹽酥雞', roofType: 'tin_green' },
-    { x: 18, z: -133.9, rotY: 0, h: 8.8, wall: '#b6bec1', brand: 'pxmart', emissive: '#1D4ED8', name: '全聯福利中心 市民店', roofType: 'parapet' },
-    { x: 30, z: -133.9, rotY: 0, h: 8.2, wall: '#c2b8ad', brand: 'elife', emissive: '#DC2626', name: '全國電子 揪甘心', roofType: 'parapet' },
-    { x: 42, z: -133.9, rotY: 0, h: 7.6, wall: '#c9bca9', brand: 'sym', emissive: '#B91C1C', name: 'SYM 三陽機車', roofType: 'parapet' },
-    { x: 54, z: -133.9, rotY: 0, h: 8.0, wall: '#bfb5a8', brand: 'dahu', emissive: '#EAB308', name: '大呼過癮 臭臭鍋', roofType: 'tin_blue' },
-    { x: 66, z: -133.9, rotY: 0, h: 8.5, wall: '#b8aca5', brand: 'chishang', emissive: '#78350F', name: '池上木片便當', roofType: 'parapet' },
-    { x: 78, z: -133.9, rotY: 0, h: 8.0, wall: '#b2c0ba', brand: 'kobayashi', emissive: '#1E3A8A', name: '小林眼鏡 市民店', roofType: 'parapet' },
-    { x: 90, z: -133.9, rotY: 0, h: 8.2, wall: '#cfc4b6', brand: 'taian', emissive: '#16A34A', name: '台安藥局 市民店', roofType: 'parapet' },
-    { x: 102, z: -133.9, rotY: 0, h: 7.8, wall: '#cbbdae', brand: 'hardware', emissive: '#0284C7', name: '振宇五金 市民店', roofType: 'tin_green' },
+    { x: 36, z: -95.5, rotY: Math.PI, h: 8.8, wall: '#bab5a8', brand: 'poya', emissive: '#F43F5E', name: '寶雅生活館', roofType: 'parapet' },
+    { x: 48, z: -95.5, rotY: Math.PI, h: 8.2, wall: '#c8bfb0', brand: 'louisa', emissive: '#EA580C', name: '路易咖啡 商業店', roofType: 'parapet' },
+    { x: 60, z: -95.5, rotY: Math.PI, h: 8.6, wall: '#b8c0ba', brand: 'bafang', emissive: '#F59E0B', name: '四方雲集 鍋貼水餃', roofType: 'parapet' },
+    { x: 72, z: -95.5, rotY: Math.PI, h: 7.8, wall: '#b6bec1', brand: 'cosmed', emissive: '#EA580C', name: '康是好 藥妝館', roofType: 'tin_green' },
+    { x: 84, z: -95.5, rotY: Math.PI, h: 8.2, wall: '#c2b8ad', brand: 'watsons', emissive: '#00838F', name: '屈臣士 Watso', roofType: 'parapet' },
+    { x: 96, z: -95.5, rotY: Math.PI, h: 8.0, wall: '#c9bca9', brand: 'hilife', emissive: '#DC2626', name: '來爾富 Hi-Day', roofType: 'parapet' },
+    { x: 108, z: -95.5, rotY: Math.PI, h: 8.2, wall: '#b8aca5', brand: 'shopee', emissive: '#EA580C', name: '蝦殼店到店', roofType: 'parapet' },
 
-    // --- 4. Street -120 South Side (Gate 3 -> Gate 4: facing North, rotY: Math.PI, z: -106.1) ---
-    { x: -36, z: -106.1, rotY: Math.PI, h: 8.0, wall: '#cad0d3', brand: 'beef_soup', emissive: '#B45309', name: '阿宗麵線 車站店', roofType: 'parapet' },
-    { x: -24, z: -106.1, rotY: Math.PI, h: 7.8, wall: '#cbbdae', brand: 'yifang', emissive: '#78350F', name: '一芳水果茶', roofType: 'tin_blue' },
-    { x: 18, z: -106.1, rotY: Math.PI, h: 8.8, wall: '#bab5a8', brand: 'poya', emissive: '#F43F5E', name: '寶雅 POYA 生活館', roofType: 'parapet' },
-    { x: 30, z: -106.1, rotY: Math.PI, h: 8.2, wall: '#c8bfb0', brand: 'louisa', emissive: '#EA580C', name: '路易莎咖啡 市民店', roofType: 'parapet' },
-    { x: 42, z: -106.1, rotY: Math.PI, h: 8.6, wall: '#b8c0ba', brand: 'dintaifung', emissive: '#991B1B', name: '鼎泰豐 小籠包', roofType: 'parapet' },
-    { x: 54, z: -106.1, rotY: Math.PI, h: 7.8, wall: '#b6bec1', brand: 'kebuke', emissive: '#064E3B', name: '可不可熟成紅茶', roofType: 'tin_green' },
-    { x: 66, z: -106.1, rotY: Math.PI, h: 8.2, wall: '#c2b8ad', brand: 'chunghwa', emissive: '#0284C7', name: '中華電信 門市', roofType: 'parapet' },
-    { x: 78, z: -106.1, rotY: Math.PI, h: 8.0, wall: '#c9bca9', brand: 'yamaha', emissive: '#1D4ED8', name: '山葉機車 YAMAHA', roofType: 'parapet' },
-    { x: 90, z: -106.1, rotY: Math.PI, h: 7.8, wall: '#bfb5a8', brand: 'sanma', emissive: '#DC2626', name: '三媽臭臭鍋 市民店', roofType: 'tin_blue' },
-    { x: 102, z: -106.1, rotY: Math.PI, h: 8.2, wall: '#b8aca5', brand: 'four_seas', emissive: '#EA580C', name: '四海遊龍 鍋貼水餃', roofType: 'parapet' },
-
-    // --- 5. Avenue 72 West Side (Gate 4 -> Gate 5: facing East, rotY: Math.PI / 2, x: 58.1) ---
-    { x: 58.1, z: -132, rotY: Math.PI / 2, h: 8.2, wall: '#b2c0ba', brand: '7eleven', emissive: '#008136', name: '７-ELEVEN 市民東門市', roofType: 'parapet' },
-    { x: 58.1, z: -144, rotY: Math.PI / 2, h: 7.8, wall: '#cfc4b6', brand: '50lan', emissive: '#FFD100', name: '５０嵐 市民大道店', roofType: 'parapet' },
-    { x: 58.1, z: -156, rotY: Math.PI / 2, h: 8.5, wall: '#cbbdae', brand: 'beef_noodles', emissive: '#7F1D1D', name: '老張牛肉麵', roofType: 'tin_green' },
-    { x: 58.1, z: -168, rotY: Math.PI / 2, h: 8.0, wall: '#c5bcaf', brand: 'mwd', emissive: '#15803D', name: '麥味登 早午餐', roofType: 'parapet' },
-    { x: 58.1, z: -180, rotY: Math.PI / 2, h: 7.6, wall: '#b8c0ba', brand: 'lottery', emissive: '#FFB800', name: '台灣彩券 公園店', roofType: 'tin_blue' },
-
-    // --- 6. Avenue 72 East Side (Gate 4 -> Gate 5: facing West, rotY: -Math.PI / 2, x: 85.9) ---
-    { x: 85.9, z: -132, rotY: -Math.PI / 2, h: 8.0, wall: '#b6bec1', brand: 'familymart', emissive: '#0090D7', name: '全家便利商店 市民東店', roofType: 'parapet' },
-    { x: 85.9, z: -144, rotY: -Math.PI / 2, h: 8.5, wall: '#c2b8ad', brand: 'chingshin', emissive: '#0D5B36', name: '清心福全 市民東店', roofType: 'parapet' },
-    { x: 85.9, z: -156, rotY: -Math.PI / 2, h: 7.8, wall: '#c9bca9', brand: 'pork_rib', emissive: '#EA580C', name: '正忠排骨 市民東店', roofType: 'parapet' },
-    { x: 85.9, z: -168, rotY: -Math.PI / 2, h: 8.2, wall: '#bfb5a8', brand: 'kymco', emissive: '#DC2626', name: '光陽機車 市民東店', roofType: 'tin_blue' },
-    { x: 85.9, z: -180, rotY: -Math.PI / 2, h: 8.0, wall: '#b8aca5', brand: 'soy_milk', emissive: '#F59E0B', name: '永和豆漿 市民東店', roofType: 'parapet' },
-
-    // --- 7. Street -184 North Side (Gate 5 -> Gate 6: facing South, rotY: 0, z: -197.9) ---
-    { x: 66, z: -197.9, rotY: 0, h: 8.5, wall: '#b2c0ba', brand: 'pxmart', emissive: '#1D4ED8', name: '全聯福利中心 公園門市', roofType: 'parapet' },
-    { x: 54, z: -197.9, rotY: 0, h: 8.0, wall: '#cfc4b6', brand: 'bafang', emissive: '#F59E0B', name: '八方雲集 公園店', roofType: 'parapet' },
-    { x: 42, z: -197.9, rotY: 0, h: 7.8, wall: '#cbbdae', brand: 'meiemei', emissive: '#15803D', name: '早安美而美 公園店', roofType: 'tin_green' },
-    { x: 30, z: -197.9, rotY: 0, h: 8.2, wall: '#c5bcaf', brand: 'cosmed', emissive: '#EA580C', name: '康是美 公園店', roofType: 'parapet' },
-    { x: 18, z: -197.9, rotY: 0, h: 8.8, wall: '#b8c0ba', brand: 'elife', emissive: '#DC2626', name: '全國電子 公園店', roofType: 'parapet' },
-    { x: 6, z: -197.9, rotY: 0, h: 8.0, wall: '#b6bec1', brand: 'showba', emissive: '#FACC15', name: '小北百貨 公園店', roofType: 'tin_blue' },
-    { x: -6, z: -197.9, rotY: 0, h: 7.6, wall: '#c2b8ad', brand: 'shopee', emissive: '#EA580C', name: '蝦皮店到店 公園店', roofType: 'parapet' },
-    { x: -18, z: -197.9, rotY: 0, h: 8.2, wall: '#c9bca9', brand: 'hardware', emissive: '#0284C7', name: '振宇五金 市民店', roofType: 'parapet' },
-    { x: -30, z: -197.9, rotY: 0, h: 8.0, wall: '#bfb5a8', brand: 'sym', emissive: '#B91C1C', name: 'SYM 三陽機車 市民店', roofType: 'parapet' },
-
-    // --- 8. Avenue 0 North (Gate 6 -> North Gate / return: z = -135 to -225) ---
-    { side: -1, z: -135, h: 8.2, wall: '#b8aca5', brand: 'hongya', emissive: '#F97316', name: '弘爺漢堡 北門店', roofType: 'parapet' },
-    { side: 1, z: -135, h: 8.0, wall: '#b2c0ba', brand: 'taian', emissive: '#16A34A', name: '台安藥局 北門店', roofType: 'parapet' },
-    { side: -1, z: -150, h: 8.5, wall: '#cfc4b6', brand: 'chishang', emissive: '#78350F', name: '池上木片便當 北門店', roofType: 'tin_green' },
-    { side: 1, z: -150, h: 7.8, wall: '#cbbdae', brand: 'dahu', emissive: '#EAB308', name: '大呼過癮 北門店', roofType: 'parapet' },
-    { side: -1, z: -165, h: 8.0, wall: '#c5bcaf', brand: 'sanma', emissive: '#DC2626', name: '三媽臭臭鍋 北門店', roofType: 'parapet' },
-    { side: 1, z: -165, h: 8.2, wall: '#b8c0ba', brand: 'louisa', emissive: '#EA580C', name: '路易莎咖啡 北門店', roofType: 'tin_blue' },
-    { side: -1, z: -195, h: 8.8, wall: '#b6bec1', brand: 'watsons', emissive: '#00838F', name: '屈臣氏 北門店', roofType: 'parapet' },
-    { side: 1, z: -195, h: 8.2, wall: '#c2b8ad', brand: 'poya', emissive: '#F43F5E', name: '寶雅 POYA 北門店', roofType: 'parapet' },
-    { side: -1, z: -210, h: 8.0, wall: '#c9bca9', brand: 'beef_noodles', emissive: '#7F1D1D', name: '老王牛肉麵', roofType: 'parapet' },
-    { side: 1, z: -210, h: 7.6, wall: '#bfb5a8', brand: 'bubble_tea', emissive: '#DC2626', name: '麻古茶坊 北門店', roofType: 'parapet' },
-    { side: -1, z: -225, h: 8.5, wall: '#b8aca5', brand: '7eleven', emissive: '#008136', name: '７-ELEVEN 北門門市', roofType: 'parapet' },
-    { side: 1, z: -225, h: 8.0, wall: '#b2c0ba', brand: 'familymart', emissive: '#0090D7', name: '全家便利商店 北門店', roofType: 'tin_blue' }
+    // --- 3. North Civic Parkway (北側市政大道: z = -144 to -204) ---
+    { side: -1, z: -144, h: 8.2, wall: '#b8aca5', brand: 'hongya', emissive: '#F97316', name: '弘叔漢堡 北門店', roofType: 'parapet' },
+    { side: 1, z: -144, h: 8.0, wall: '#b2c0ba', brand: 'taian', emissive: '#16A34A', name: '台康藥局 北門店', roofType: 'parapet' },
+    { side: -1, z: -158, h: 8.5, wall: '#cfc4b6', brand: 'chishang', emissive: '#78350F', name: '池下木片便當 北門店', roofType: 'tin_green' },
+    { side: 1, z: -158, h: 7.8, wall: '#cbbdae', brand: 'dahu', emissive: '#EAB308', name: '大喊過癮 北門店', roofType: 'parapet' },
+    { side: -1, z: -172, h: 8.0, wall: '#c5bcaf', brand: 'hardware', emissive: '#0284C7', name: '振華五金 北門店', roofType: 'parapet' },
+    { side: 1, z: -172, h: 8.2, wall: '#b8c0ba', brand: 'showba', emissive: '#FACC15', name: '小南百貨 北門店', roofType: 'tin_blue' },
+    { side: -1, z: -196, h: 8.5, wall: '#b8aca5', brand: '7eleven', emissive: '#008136', name: '8-TWELVE 北門門市', roofType: 'parapet' },
+    { side: 1, z: -196, h: 8.0, wall: '#b2c0ba', brand: 'familymart', emissive: '#0090D7', name: '我家便利商店 北門店', roofType: 'tin_blue' }
   ];
   // --------------------------------------------------------------------------
-  // Build Sidewalks & Curb Lines along All Major Circuit Streets
+  // Build Sidewalks & Curb Lines along Radial & Central Arterials
   // --------------------------------------------------------------------------
   function addSidewalkStrip(cx, cz, w, d, isHorizontal = false) {
     addBox(street, concreteMat, cx, 0.12, cz, w, 0.24, d);
@@ -3119,28 +4334,44 @@ function* buildTaiwanMarketStreet() {
     }
   }
 
-  // Avenue 0 (Helipad approach, Central Ave South & North)
   for (const side of [-1, 1]) {
-    addSidewalkStrip(side * 8.45, 8, 2.9, 28);
-    addSidewalkStrip(side * 8.45, -43, 2.9, 52);
-    addSidewalkStrip(side * 8.45, -105, 2.9, 30);
-    addSidewalkStrip(side * 8.45, -180, 2.9, 96);
+    addSidewalkStrip(side * 8.45, -56, 2.9, 52);
+    addSidewalkStrip(side * 8.45, -172, 2.9, 68);
   }
+  addSidewalkStrip(72, -118.5, 86, 2.9, true);
+  addSidewalkStrip(72, -101.5, 86, 2.9, true);
 
-  // Street -120 (Station Front & Civic Avenue South: Gate 3 -> Gate 4)
-  addSidewalkStrip(36, -128.5, 150, 2.9, true);
-  addSidewalkStrip(36, -111.5, 150, 2.9, true);
-
-  // Avenue 72 (Civic Avenue East: Gate 4 -> Gate 5)
-  addSidewalkStrip(63.55, -156, 2.9, 64);
-  addSidewalkStrip(80.45, -156, 2.9, 64);
-
-  // Street -184 (Civic Park North & Civic Center: Gate 5 -> Gate 6)
-  addSidewalkStrip(20, -192.5, 120, 2.9, true);
-  addSidewalkStrip(-20, -175.5, 50, 2.9, true);
+  const shopIntCanvas = document.createElement('canvas');
+  shopIntCanvas.width = 128;
+  shopIntCanvas.height = 128;
+  const sCtx = shopIntCanvas.getContext('2d');
+  const sGrad = sCtx.createLinearGradient(0, 0, 0, 128);
+  sGrad.addColorStop(0.0, '#fef3c7');
+  sGrad.addColorStop(0.18, '#475569');
+  sGrad.addColorStop(0.55, '#1e293b');
+  sGrad.addColorStop(1.0, '#0f172a');
+  sCtx.fillStyle = sGrad;
+  sCtx.fillRect(0, 0, 128, 128);
+  // Subtle interior shelf silhouettes & glass mullions
+  sCtx.fillStyle = 'rgba(255, 251, 235, 0.24)';
+  sCtx.fillRect(10, 6, 108, 7);
+  sCtx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+  sCtx.fillRect(0, 0, 6, 128);
+  sCtx.fillRect(122, 0, 6, 128);
+  sCtx.fillRect(62, 0, 4, 128);
+  const shopIntTex = new THREE.CanvasTexture(shopIntCanvas);
+  shopIntTex.encoding = THREE.sRGBEncoding;
+  const shopGlassMat = new THREE.MeshStandardMaterial({
+    map: shopIntTex,
+    roughness: 0.14,
+    metalness: 0.45,
+    emissiveMap: shopIntTex,
+    emissive: new THREE.Color(0xfffbeb),
+    emissiveIntensity: state.timeOfDay === 'night' ? 0.55 : 0.14
+  });
 
   // --------------------------------------------------------------------------
-  // Assemble Each Shophouse (透天店屋結構：女兒牆平頂、官方客製招牌、冷氣鐵窗嵌合)
+  // Assemble Each Shophouse (4~6層台灣透天/華廈騎樓街屋：立體陽台窗框、可見側招、店面玻璃)
   // --------------------------------------------------------------------------
   for (const [sIdx, shop] of taiwanShops.entries()) {
     yield;
@@ -3160,15 +4391,16 @@ function* buildTaiwanMarketStreet() {
     const colW = isAlongStreet ? 11.2 : 8.0;
     const colD = isAlongStreet ? 8.0 : 11.2;
 
-    const arcadeHeight = 3.4;
+    const arcadeHeight = 3.5;
     const houseW = 11.2;
     const houseD = 8.0;
-    const houseH = shop.h;
+    const extraFloors = 2 + (sIdx % 3); // 4~6 stories total (14m ~ 21m)
+    const houseH = shop.h + extraFloors * 3.2;
 
     const tileTex = createTileTexture(shop.wall);
-    const wallMat = material(shop.wall, 0.85, 0.1, tileTex);
+    const wallMat = material(shop.wall, 0.85, 0.08, tileTex);
 
-    // 1. Upper Building Mass (2F~4F 建築主體，從騎樓上方起算)
+    // 1. Upper Building Mass (2F~6F 建築主體，從騎樓上方起算)
     addBox(storefront, wallMat, 0, (houseH + arcadeHeight) / 2, 0, houseW, houseH - arcadeHeight, houseD, true, true);
 
     // 2. Ground Floor Shop Back Wall (1F 店面後牆與店鋪空間)
@@ -3190,11 +4422,10 @@ function* buildTaiwanMarketStreet() {
     // 4. Arcade Ceiling & Beams (騎樓天花板與過梁)
     addBox(storefront, concreteMat, 0, arcadeHeight - 0.15, 1.8, houseW, 0.3, 3.8);
 
-    // 5. Storefront Glass & Warm Interior
-    addBox(storefront, darkMetalMat, 0, 1.6, 2.05, 10.4, 3.0, 0.12);
-    for (const u of [-3.5, 0, 3.5]) {
-      addBox(storefront, glassMat, u, 1.55, 2.14, 2.85, 2.65, 0.06);
-      addBox(storefront, material(0xfffbeb, 0.4), u, 1.55, 2.11, 2.5, 2.4, 0.02);
+    // 5. Storefront Glass & Realistic Shop Interior
+    addBox(storefront, darkMetalMat, 0, 1.6, 2.02, 10.4, 3.1, 0.08);
+    for (const u of [-3.4, 0, 3.4]) {
+      addBox(storefront, shopGlassMat, u, 1.55, 2.12, 3.1, 2.75, 0.06);
     }
 
     // 6. FRONT HORIZONTAL FASCIA SIGN (客製化店面大橫招牌)
@@ -3202,34 +4433,50 @@ function* buildTaiwanMarketStreet() {
     addBox(storefront, hSignMat, 0, arcadeHeight + 0.85, 4.14, 8.8, 1.45, 0.14, true, true);
     addBox(storefront, darkMetalMat, 0, arcadeHeight + 1.62, 4.18, 9.1, 0.12, 0.35);
 
-    // 7. OVERHANGING VERTICAL BLADE SIGN (客製化雙面突出看板，厚重槽鋼深植外牆)
+    // 7. OVERHANGING VERTICAL BLADE SIGN (修正黑盒遮擋：雙面看板寬度大於鐵架，完整顯色)
     const vSignMat = createCustomShopSignMat(shop.brand, true, shop.emissive);
     const vSignW = 1.05;
     const vSignH = 3.8;
-    const vSignD = 0.18;
     const vSignU = 4.75;
-    const vSignY = arcadeHeight + 2.2;
-    const vSignZ = 4.85;
+    const vSignY = arcadeHeight + 2.4;
+    const vSignZ = 4.88;
 
-    // Steel Cantilever Mounting Brackets firmly into wall
     [-1.2, 1.2].forEach((armOff) => {
       addBox(storefront, steelMat, vSignU, vSignY + armOff, 4.25, 0.08, 0.08, 1.2);
     });
+    addBox(storefront, darkMetalMat, vSignU, vSignY, vSignZ, 0.09, vSignH + 0.12, vSignW + 0.10, true, true);
+    addBox(storefront, vSignMat, vSignU, vSignY, vSignZ, 0.13, vSignH, vSignW);
 
-    addBox(storefront, darkMetalMat, vSignU, vSignY, vSignZ, 0.1, vSignH + 0.1, vSignD + 0.1, true, true);
-    addBox(storefront, vSignMat, vSignU, vSignY, vSignZ, 0.08, vSignH, vSignD);
-
-    // 8. EXTERIOR AIR CONDITIONER OUTDOOR UNITS (緊貼外牆)
-    const acU = -2.2;
-    const acY = arcadeHeight + 1.1;
-    const acZ = 4.28;
-    addBox(storefront, acMat, acU, acY, acZ, 0.95, 0.65, 0.38, true);
-    addBox(storefront, steelMat, acU, acY - 0.36, acZ - 0.05, 0.75, 0.08, 0.32);
-
-    // 9. WINDOW GRILLES (不鏽鋼外推鐵窗)
-    for (const winU of [-3.2, 2.4]) {
-      addBox(storefront, steelMat, winU, arcadeHeight + 2.4, 4.22, 2.1, 1.5, 0.32);
-      addBox(storefront, glassMat, winU, arcadeHeight + 2.4, 4.08, 1.9, 1.35, 0.05);
+    // 8. UPPER FLOOR WINDOWS, CONCRETE LEDGES, IRON GRILLES & AC UNITS (2F~6F 完整立面)
+    const upperFloorCount = Math.max(1, Math.floor((houseH - arcadeHeight - 0.6) / 3.2));
+    for (let uf = 0; uf < upperFloorCount; uf++) {
+      const fy = arcadeHeight + uf * 3.2;
+      // Floor slab ledge (層間水泥線腳)
+      if (uf > 0) {
+        addBox(storefront, concreteMat, 0, fy + 0.1, 4.12, houseW + 0.1, 0.22, 0.30);
+      }
+      // Windows + Iron Grilles on upper floors (skip 2F behind fascia sign if uf === 0)
+      if (uf >= 1) {
+        for (const winU of [-3.3, 0.2, 3.1]) {
+          addBox(storefront, steelMat, winU, fy + 1.65, 4.20, 2.0, 1.45, 0.30);
+          addBox(storefront, glassMat, winU, fy + 1.65, 4.06, 1.8, 1.30, 0.05);
+          addBox(storefront, concreteMat, winU, fy + 2.48, 4.24, 2.2, 0.14, 0.38);
+        }
+        // Multi-brand AC outdoor unit mounted logically between windows with L-brackets & pipe wrap
+        const acStyle = (sIdx + uf) % acMats.length;
+        const acH = acStyle === 2 ? 0.98 : 0.62;
+        const acU = (uf % 2 === 0) ? -1.55 : 1.65;
+        addBox(storefront, acMats[acStyle], acU, fy + 0.65 + acH / 2, 4.24, 0.92, acH, 0.36, true);
+        addBox(storefront, steelMat, acU - 0.30, fy + 0.58, 4.20, 0.06, 0.12, 0.36);
+        addBox(storefront, steelMat, acU + 0.30, fy + 0.58, 4.20, 0.06, 0.12, 0.36);
+        addBox(storefront, darkMetalMat, acU + 0.48, fy + 0.92, 4.10, 0.07, 0.68, 0.07);
+      } else {
+        // 2F commercial AC mounted neatly beside left edge above fascia sign
+        const acStyle = sIdx % acMats.length;
+        addBox(storefront, acMats[acStyle], -4.2, fy + 2.35, 4.24, 0.92, 0.62, 0.36, true);
+        addBox(storefront, steelMat, -4.2, fy + 1.98, 4.20, 0.72, 0.08, 0.32);
+        addBox(storefront, darkMetalMat, -3.72, fy + 2.55, 4.10, 0.07, 0.55, 0.07);
+      }
     }
 
     // 10. AUTHENTIC ROOFTOPS: PARAPET WALLS & WEATHERED WATER TANKS (台灣標準女兒牆平頂)
@@ -3280,28 +4527,7 @@ function* buildTaiwanMarketStreet() {
       registerBoxCollider(x, roofFloorY + tinH / 2, shop.z, houseW, tinH, houseD, '頂樓鐵皮加蓋', '#48535e', false);
     }
 
-    // 11. PARKED SCOOTERS
-    if (shop.name.includes('機車') || shop.name.includes('超商') || shop.name.includes('牛肉麵')) {
-      for (const scU of [-2.4, 1.8]) {
-        const scGroup = new THREE.Group();
-        scGroup.position.set(scU, 0.08, 4.45);
-        storefront.add(scGroup);
-
-        const scColor = material(shop.emissive, 0.45, 0.2);
-        [-0.52, 0.52].forEach((wz) => {
-          const w = new THREE.Mesh(scooterWheelGeo, scooterRubber);
-          w.rotation.z = Math.PI / 2;
-          w.position.set(0, 0.24, wz);
-          scGroup.add(w);
-        });
-        addBox(scGroup, scColor, 0, 0.55, -0.15, 0.42, 0.45, 0.72, true);
-        addBox(scGroup, scooterRubber, 0, 0.78, -0.18, 0.36, 0.12, 0.65);
-        addBox(scGroup, scColor, 0, 0.68, 0.46, 0.38, 0.62, 0.24);
-        addBox(scGroup, steelMat, 0, 1.02, 0.44, 0.62, 0.06, 0.06);
-
-        registerBoxCollider(toWorldX(scU, 4.45), 0.65, toWorldZ(scU, 4.45), 1.2, 1.1, 1.2, '路邊停放機車', shop.emissive, false);
-      }
-    }
+    // (Boxy legacy storefront scooters removed; sculpted ExtrudeGeometry InstancedMesh scooters now populate roadside bays)
 
     registerBoxCollider(x, (houseH + arcadeHeight) / 2, z, colW, houseH - arcadeHeight, colD, shop.name, shop.emissive, true);
     registerBoxCollider(toWorldX(0, 4.14), arcadeHeight + 0.85, toWorldZ(0, 4.14), isAlongStreet ? 8.8 : 0.4, 1.5, isAlongStreet ? 0.4 : 8.8, shop.name + ' 店面橫招', shop.emissive, false);
@@ -3474,28 +4700,23 @@ function* buildTaiwanMarketStreet() {
     registerBoxCollider(px, 4.3, pz, 0.6, 8.5, 0.6, '路邊電線桿', '#eab308', false);
   }
 
-  // Avenue 0 Poles
-  for (const pz of [16, -8, -24, -48, -72, -104, -136, -164, -192, -220]) {
+  // Avenue 0 Poles (South & North of Central Roundabout)
+  for (const pz of [-36, -56, -76, -142, -166, -194]) {
     for (const px of [-7.6, 7.6]) {
-      addSingleUtilityPole(px, pz, Math.abs(pz) === 48 || Math.abs(pz) === 104 || Math.abs(pz) === 164);
+      addSingleUtilityPole(px, pz, Math.abs(pz) === 56 || Math.abs(pz) === 166);
     }
   }
 
-  // Street -120 Poles (Gate 3 -> Gate 4)
-  for (const px of [-36, -12, 16, 40, 64, 88, 108]) {
-    addSingleUtilityPole(px, -127.5, px === 40 || px === 88);
-    addSingleUtilityPole(px, -112.5, px === 16 || px === 64);
+  // East-West Avenue (-110) Poles (Clear of Roundabout)
+  for (const px of [-104, -76, -48, 36, 60, 84, 108]) {
+    addSingleUtilityPole(px, -117.5, Math.abs(px) === 48 || px === 84);
+    addSingleUtilityPole(px, -102.5, Math.abs(px) === 76 || px === 60);
   }
 
-  // Avenue 72 Poles (Gate 4 -> Gate 5)
-  for (const pz of [-132, -156, -180]) {
-    addSingleUtilityPole(64.4, pz, pz === -156);
-    addSingleUtilityPole(79.6, pz, pz === -132);
-  }
-
-  // Street -184 Poles (Gate 5 -> Gate 6)
-  for (const px of [60, 36, 12, -12, -30]) {
-    addSingleUtilityPole(px, -191.5, px === 36);
+  // Outer Ring West & East Poles
+  for (const pz of [-196, -156, -68, -4]) {
+    addSingleUtilityPole(-114.5, pz, pz === -156);
+    addSingleUtilityPole(114.5, pz, pz === -68);
   }
 
   // Sausage Food Cart (台灣經典香腸攤)
@@ -3508,6 +4729,300 @@ function* buildTaiwanMarketStreet() {
   umb.position.set(-0.5, 2.5, 0);
   cartGroup.add(umb);
   registerBoxCollider(7.6, 1.1, -40, 1.8, 2.0, 1.5, '大腸包小腸攤車', '#b91c1c', false);
+
+  // --------------------------------------------------------------------------
+  // INSTANCED TAIWANESE PARKED SCOOTERS & BAYS (機車停車格與成排機車群 - Single Draw Call)
+  // --------------------------------------------------------------------------
+  const scooterSpots = [];
+  const bayLines = [];
+  let scSeed = 515;
+  const scRand = () => {
+    scSeed = (Math.imul(1664525, scSeed) + 1013904223) >>> 0;
+    return scSeed / 4294967296;
+  };
+  const scooterPalette = [
+    0x1e293b, 0xcbd5e1, 0x881313, 0x334155,
+    0x0f5e58, 0xd4d4d8, 0x27272a, 0x1e3a8a
+  ].map(hex => new THREE.Color(hex).convertSRGBToLinear());
+
+  // Parked scooter bays across Central/Outer Ring Avenues & E-W Arterials
+  for (const ax of CITY.avenues) {
+    for (const side of [-1, 1]) {
+      for (let z = -34; z >= -212; z -= 1.45) {
+        if (CITY.streets.some(s => Math.abs(z - s) < 16)) continue;
+        if (ax === 0 && Math.abs(z + 110) < 28) continue;
+        bayLines.push([ax + side * 8.1, z, 1.4, 0.08]);
+        if (scRand() > 0.28) {
+          scooterSpots.push({
+            x: ax + side * 8.1 + (scRand() - 0.5) * 0.14,
+            z: z + (scRand() - 0.5) * 0.12,
+            rotY: (side > 0 ? Math.PI / 2 : -Math.PI / 2) + (scRand() - 0.5) * 0.18,
+            color: scooterPalette[Math.floor(scRand() * scooterPalette.length)]
+          });
+        }
+      }
+    }
+  }
+  // Street -110 & -224 parked scooter bays
+  for (const sz of [-110, -224]) {
+    for (const side of [-1, 1]) {
+      const zBay = sz + side * 8.0;
+      for (let x = -108; x <= 108; x += 1.45) {
+        if (CITY.avenues.some(a => Math.abs(x - a) < 16)) continue;
+        if (sz === -110 && Math.abs(x) < 29) continue;
+        bayLines.push([x, zBay, 0.08, 1.4]);
+        if (scRand() > 0.30) {
+          scooterSpots.push({
+            x: x + (scRand() - 0.5) * 0.12,
+            z: zBay + (scRand() - 0.5) * 0.14,
+            rotY: (side < 0 ? 0 : Math.PI) + (scRand() - 0.5) * 0.18,
+            color: scooterPalette[Math.floor(scRand() * scooterPalette.length)]
+          });
+        }
+      }
+    }
+  }
+
+  if (bayLines.length > 0) {
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0xc8c5bc, roughness: 0.92 });
+    const bayMesh = new THREE.InstancedMesh(cubeGeo, lineMat, bayLines.length);
+    const bt = new THREE.Object3D();
+    bayLines.forEach(([bx, bz, bw, bd], i) => {
+      bt.position.set(bx, 0.245, bz);
+      bt.scale.set(bw, 0.015, bd);
+      bt.updateMatrix();
+      bayMesh.setMatrixAt(i, bt.matrix);
+    });
+    bayMesh.receiveShadow = true;
+    bayMesh.frustumCulled = false;
+    street.add(bayMesh);
+  }
+
+  if (scooterSpots.length > 0) {
+    // Sculpted 125cc Taiwanese Scooter Body Profile (流線速克達車殼外型)
+    const scShape = new THREE.Shape();
+    scShape.moveTo(-0.74, 0.46);
+    scShape.quadraticCurveTo(-0.78, 0.64, -0.54, 0.72);
+    scShape.lineTo(-0.14, 0.68);
+    scShape.quadraticCurveTo(-0.04, 0.42, 0.06, 0.36);
+    scShape.lineTo(0.28, 0.36);
+    scShape.quadraticCurveTo(0.36, 0.66, 0.38, 0.90);
+    scShape.quadraticCurveTo(0.46, 0.99, 0.56, 0.90);
+    scShape.quadraticCurveTo(0.68, 0.64, 0.64, 0.42);
+    scShape.lineTo(0.48, 0.33);
+    scShape.lineTo(0.24, 0.24);
+    scShape.lineTo(-0.38, 0.26);
+    scShape.quadraticCurveTo(-0.56, 0.42, -0.74, 0.46);
+    const scBodyGeo = new THREE.ExtrudeGeometry(scShape, {
+      depth: 0.28, bevelEnabled: true, bevelSize: 0.065, bevelThickness: 0.065, bevelSegments: 3
+    });
+    scBodyGeo.translate(0, 0, -0.14);
+    scBodyGeo.rotateY(-Math.PI / 2);
+
+    // Sculpted Ergonomic Saddle Profile
+    const seatShape = new THREE.Shape();
+    seatShape.moveTo(-0.56, 0.71);
+    seatShape.quadraticCurveTo(-0.32, 0.80, -0.06, 0.72);
+    seatShape.lineTo(-0.10, 0.65);
+    seatShape.lineTo(-0.52, 0.65);
+    seatShape.closePath();
+    const scSeatGeo = new THREE.ExtrudeGeometry(seatShape, {
+      depth: 0.24, bevelEnabled: true, bevelSize: 0.035, bevelThickness: 0.035, bevelSegments: 2
+    });
+    scSeatGeo.translate(0, 0, -0.12);
+    scSeatGeo.rotateY(-Math.PI / 2);
+
+    const scHandleGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.66, 8);
+    scHandleGeo.rotateZ(Math.PI / 2);
+    const scMirrorGeo = new THREE.CylinderGeometry(0.055, 0.055, 0.026, 10);
+    scMirrorGeo.rotateX(Math.PI / 2);
+    const scStemGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.16, 6);
+    const scVisorGeo = new THREE.CylinderGeometry(0.14, 0.16, 0.16, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
+    const scFenderGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.15, 12, 1, false, -Math.PI * 0.35, Math.PI * 0.7);
+    scFenderGeo.rotateZ(Math.PI / 2);
+    const scRimGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.125, 12);
+    const scHeadlightGeo = new THREE.CylinderGeometry(0.085, 0.095, 0.05, 12);
+    scHeadlightGeo.rotateX(Math.PI / 2);
+    scHeadlightGeo.scale(1.25, 0.85, 1);
+    const scExhaustGeo = new THREE.CylinderGeometry(0.045, 0.055, 0.44, 10);
+    scExhaustGeo.rotateX(Math.PI / 2);
+    const scTailGeo = new THREE.BoxGeometry(0.16, 0.075, 0.04);
+    const scPlateGeo = new THREE.BoxGeometry(0.22, 0.12, 0.018);
+
+    const scBodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.28, metalness: 0.38 });
+    const scSeatMat = new THREE.MeshStandardMaterial({ color: 0x1a1c20, roughness: 0.85 });
+    const scHeadlightMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.12, metalness: 0.2 });
+    const scVisorMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.15, metalness: 0.6 });
+    const scTailMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.25, emissive: 0x7f1d1d, emissiveIntensity: 0.25 });
+    const scPlateMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.55 });
+
+    const scBodyMesh = new THREE.InstancedMesh(scBodyGeo, scBodyMat, scooterSpots.length);
+    const scSeatMesh = new THREE.InstancedMesh(scSeatGeo, scSeatMat, scooterSpots.length);
+    const scHandleMesh = new THREE.InstancedMesh(scHandleGeo, darkMetalMat, scooterSpots.length);
+    const scMirrorMesh = new THREE.InstancedMesh(scMirrorGeo, darkMetalMat, scooterSpots.length * 2);
+    const scStemMesh = new THREE.InstancedMesh(scStemGeo, darkMetalMat, scooterSpots.length * 2);
+    const scVisorMesh = new THREE.InstancedMesh(scVisorGeo, scVisorMat, scooterSpots.length);
+    const scFenderMesh = new THREE.InstancedMesh(scFenderGeo, scBodyMat, scooterSpots.length);
+    const scHeadMesh = new THREE.InstancedMesh(scHeadlightGeo, scHeadlightMat, scooterSpots.length);
+    const scExhaustMesh = new THREE.InstancedMesh(scExhaustGeo, steelMat, scooterSpots.length);
+    const scTailMesh = new THREE.InstancedMesh(scTailGeo, scTailMat, scooterSpots.length);
+    const scPlateMesh = new THREE.InstancedMesh(scPlateGeo, scPlateMat, scooterSpots.length);
+    const scWheelMesh = new THREE.InstancedMesh(scooterWheelGeo, scooterRubber, scooterSpots.length * 2);
+    const scRimMesh = new THREE.InstancedMesh(scRimGeo, steelMat, scooterSpots.length * 2);
+
+    const st = new THREE.Object3D();
+    const sMat = new THREE.Matrix4();
+    const rotW = new THREE.Matrix4().makeRotationZ(Math.PI / 2);
+
+    const placeScooterPart = (mesh, idx, lx, ly, lz, rx, ry, rz, spot, extraRot = null) => {
+      const c = Math.cos(spot.rotY), s = Math.sin(spot.rotY);
+      st.position.set(spot.x + lx * c + lz * s, 0.24 + ly, spot.z - lx * s + lz * c);
+      st.rotation.set(rx, spot.rotY + ry, rz);
+      st.scale.set(1, 1, 1);
+      st.updateMatrix();
+      if (extraRot) {
+        sMat.copy(st.matrix).multiply(extraRot);
+        mesh.setMatrixAt(idx, sMat);
+      } else {
+        mesh.setMatrixAt(idx, st.matrix);
+      }
+    };
+
+    scooterSpots.forEach((spot, i) => {
+      // Slight natural kickstand lean (roll ~ 0.07 rad)
+      const lean = (i % 2 === 0 ? 1 : -1) * 0.07;
+      placeScooterPart(scBodyMesh, i, 0, 0, 0, 0, 0, lean, spot);
+      scBodyMesh.setColorAt(i, spot.color);
+      placeScooterPart(scFenderMesh, i, 0, 0.28, 0.49, 0.25, 0, lean, spot);
+      scFenderMesh.setColorAt(i, spot.color);
+      placeScooterPart(scSeatMesh, i, 0, 0, 0, 0, 0, lean, spot);
+      placeScooterPart(scHandleMesh, i, 0, 0.98, 0.44, 0, 0, lean, spot);
+      placeScooterPart(scVisorMesh, i, 0, 1.03, 0.50, -0.35, 0, lean, spot);
+      placeScooterPart(scHeadMesh, i, 0, 0.78, 0.59, -0.18, 0, lean, spot);
+      placeScooterPart(scStemMesh, i * 2, -0.24, 1.06, 0.44, 0, 0, lean + 0.18, spot);
+      placeScooterPart(scStemMesh, i * 2 + 1, 0.24, 1.06, 0.44, 0, 0, lean - 0.18, spot);
+      placeScooterPart(scMirrorMesh, i * 2, -0.28, 1.14, 0.44, 0, 0.18, lean, spot);
+      placeScooterPart(scMirrorMesh, i * 2 + 1, 0.28, 1.14, 0.44, 0, -0.18, lean, spot);
+      placeScooterPart(scExhaustMesh, i, 0.21, 0.26, -0.44, -0.16, 0, lean, spot);
+      placeScooterPart(scTailMesh, i, 0, 0.62, -0.73, 0.12, 0, lean, spot);
+      placeScooterPart(scPlateMesh, i, 0, 0.46, -0.76, 0.18, 0, lean, spot);
+      placeScooterPart(scWheelMesh, i * 2, 0, 0.24, 0.48, 0, 0, lean, spot, rotW);
+      placeScooterPart(scWheelMesh, i * 2 + 1, 0, 0.24, -0.48, 0, 0, lean, spot, rotW);
+      placeScooterPart(scRimMesh, i * 2, 0, 0.24, 0.48, 0, 0, lean, spot, rotW);
+      placeScooterPart(scRimMesh, i * 2 + 1, 0, 0.24, -0.48, 0, 0, lean, spot, rotW);
+    });
+    if (scBodyMesh.instanceColor) scBodyMesh.instanceColor.needsUpdate = true;
+    if (scFenderMesh.instanceColor) scFenderMesh.instanceColor.needsUpdate = true;
+    [
+      scBodyMesh, scFenderMesh, scSeatMesh, scHandleMesh, scVisorMesh,
+      scStemMesh, scMirrorMesh, scHeadMesh, scExhaustMesh, scTailMesh,
+      scPlateMesh, scWheelMesh, scRimMesh
+    ].forEach((m) => {
+      m.frustumCulled = false;
+      m.castShadow = true;
+      m.receiveShadow = true;
+      street.add(m);
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // INSTANCED TAIWANESE STREETLIGHTS (鋁合金彎臂路燈 - Single Draw Call)
+  // --------------------------------------------------------------------------
+  const lampPosts = [];
+  for (const ax of CITY.avenues) {
+    for (const lz of [-18, -56, -92, -148, -206]) {
+      lampPosts.push({ x: ax - 7.5, z: lz, dirX: 1, dirZ: 0 });
+      lampPosts.push({ x: ax + 7.5, z: lz, dirX: -1, dirZ: 0 });
+    }
+  }
+  for (const sz of [-184, -120, -28]) {
+    for (const lx of [-104, -44, -24, 24, 52, 94]) {
+      lampPosts.push({ x: lx, z: sz - 7.6, dirX: 0, dirZ: 1 });
+      lampPosts.push({ x: lx, z: sz + 7.6, dirX: 0, dirZ: -1 });
+    }
+  }
+  if (lampPosts.length > 0) {
+    const postGeo = new THREE.CylinderGeometry(0.08, 0.12, 6.8, 8);
+    const lampHeadMat = new THREE.MeshStandardMaterial({
+      color: 0xf8fafc,
+      emissive: 0xffd28a,
+      emissiveIntensity: state.timeOfDay === 'night' ? 2.2 : (state.timeOfDay === 'sunset' ? 1.1 : 0.08),
+      roughness: 0.3
+    });
+    window.taiwanEmissiveMaterials.push(lampHeadMat);
+
+    const postMesh = new THREE.InstancedMesh(postGeo, steelMat, lampPosts.length);
+    const armMesh = new THREE.InstancedMesh(cubeGeo, steelMat, lampPosts.length);
+    const headMesh = new THREE.InstancedMesh(cubeGeo, lampHeadMat, lampPosts.length);
+    const lt = new THREE.Object3D();
+
+    lampPosts.forEach((lp, i) => {
+      lt.position.set(lp.x, 3.6, lp.z);
+      lt.rotation.set(0, 0, 0);
+      lt.scale.set(1, 1, 1);
+      lt.updateMatrix();
+      postMesh.setMatrixAt(i, lt.matrix);
+
+      const angle = Math.atan2(lp.dirX, lp.dirZ);
+      lt.position.set(lp.x + lp.dirX * 0.9, 6.95, lp.z + lp.dirZ * 0.9);
+      lt.rotation.set(0, angle, 0);
+      lt.scale.set(0.10, 0.10, 1.9);
+      lt.updateMatrix();
+      armMesh.setMatrixAt(i, lt.matrix);
+
+      lt.position.set(lp.x + lp.dirX * 1.75, 6.88, lp.z + lp.dirZ * 1.75);
+      lt.scale.set(0.32, 0.12, 0.58);
+      lt.updateMatrix();
+      headMesh.setMatrixAt(i, lt.matrix);
+    });
+    [postMesh, armMesh, headMesh].forEach((m) => {
+      m.frustumCulled = false;
+      street.add(m);
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // LONGITUDINAL OVERHEAD UTILITY WIRES (沿街高架電纜 - 避開飛行橫向航道)
+  // --------------------------------------------------------------------------
+  const wireSegments = [];
+  const addWireRun = (pts) => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x1, z1] = pts[i], [x2, z2] = pts[i + 1];
+      for (const hOff of [7.85, 8.2]) {
+        wireSegments.push([x1, hOff, z1, x2, hOff, z2]);
+      }
+    }
+  };
+  const ave0Z = [16, -8, -24, -48, -72];
+  addWireRun(ave0Z.map(z => [-7.6, z]));
+  addWireRun(ave0Z.map(z => [7.6, z]));
+  const ave0NZ = [-104, -136, -164, -192, -220];
+  addWireRun(ave0NZ.map(z => [-7.6, z]));
+  addWireRun(ave0NZ.map(z => [7.6, z]));
+  const st120X = [-36, -12, 16, 40, 64, 88, 108];
+  addWireRun(st120X.map(x => [x, -127.5]));
+  addWireRun(st120X.map(x => [x, -112.5]));
+  const ave72Z = [-132, -156, -180];
+  addWireRun(ave72Z.map(z => [64.4, z]));
+  addWireRun(ave72Z.map(z => [79.6, z]));
+  const st184X = [60, 36, 12, -12, -30];
+  addWireRun(st184X.map(x => [x, -191.5]));
+
+  if (wireSegments.length > 0) {
+    const wireMat = new THREE.MeshBasicMaterial({ color: 0x1e2024 });
+    const wireMesh = new THREE.InstancedMesh(cubeGeo, wireMat, wireSegments.length);
+    const wt = new THREE.Object3D();
+    wireSegments.forEach(([x1, y1, z1, x2, y2, z2], i) => {
+      const dx = x2 - x1, dz = z2 - z1;
+      wt.position.set((x1 + x2) / 2, y1, (z1 + z2) / 2);
+      wt.rotation.set(0, Math.atan2(dx, dz), 0);
+      wt.scale.set(0.035, 0.035, Math.hypot(dx, dz));
+      wt.updateMatrix();
+      wireMesh.setMatrixAt(i, wt.matrix);
+    });
+    wireMesh.frustumCulled = false;
+    street.add(wireMesh);
+  }
 
   cityGroup.add(street);
 }
@@ -4433,6 +5948,7 @@ const TRAINING_TASKS = [
     shortName: '起飛與定高懸停',
     descDual: '按住 <kbd>W</kbd> 垂直爬升至 10 公尺，放開按鍵或按 <kbd>Space</kbd> 保持懸停 2 秒',
     descSingle: '按住 <kbd>Shift</kbd> 或 <kbd>U</kbd> 爬升至 10 公尺，放開或按 <kbd>Space</kbd> 保持懸停 2 秒',
+    descGamepad: '將 <kbd>左搖桿</kbd> 向上推至 10 公尺，鬆開或按 <kbd>L2</kbd> 保持懸停 2 秒',
     keysDual: ['key-top-l2'],
     keysSingle: ['key-top-l2'],
     targetText: '起降坪正上方 10m 定高懸停目標區',
@@ -4440,47 +5956,51 @@ const TRAINING_TASKS = [
   },
   {
     step: 2,
-    title: '任務二：俯仰前進與等速巡航',
-    shortName: '俯仰前進推進',
-    descDual: '按住右手方向鍵 <kbd>↑</kbd> 壓低機頭向前推進，穿過前方的【1號訓練光圈】',
-    descSingle: '按住 <kbd>W</kbd> 向前推進飛行，穿過前方的【1號訓練光圈】',
+    title: '任務二：校園低空巡檢（俯仰前進）',
+    shortName: '校園低空巡檢',
+    descDual: '按住右手方向鍵 <kbd>↑</kbd> 向前巡航，飛抵【市立國小操場】上方光標區',
+    descSingle: '按住 <kbd>W</kbd> 向前推進飛行，飛抵【市立國小操場】上方光標區',
+    descGamepad: '將 <kbd>右搖桿</kbd> 向上推，飛抵【市立國小操場】上方光標區',
     keysDual: ['key-top-r1'],
     keysSingle: ['key-top-l2'],
-    targetText: '穿過 1 號訓練光圈（騎樓商圈入口）',
-    successMsg: 'GREAT! 掌握俯仰前進與等速巡航速度！'
+    targetText: '飛抵市立國小操場上空完成低空巡檢',
+    successMsg: 'GREAT! 校園低空巡檢與前進巡航完成！'
   },
   {
     step: 3,
-    title: '任務三：機頭旋轉偏航轉向',
-    shortName: '航向偏航轉向',
-    descDual: '使用左手 <kbd>A</kbd> 或 <kbd>D</kbd> 轉動機頭朝向，對準並穿過【2號光圈】',
-    descSingle: '使用 <kbd>Q</kbd> 或 <kbd>E</kbd> 轉動機頭朝向，對準並穿過【2號光圈】',
+    title: '任務三：圓環地標航拍（偏航轉向）',
+    shortName: '圓環地標航拍',
+    descDual: '使用左手 <kbd>A</kbd> 或 <kbd>D</kbd> 轉動機頭，對準並飛抵【市中心圓環紀念碑】',
+    descSingle: '使用 <kbd>Q</kbd> 或 <kbd>E</kbd> 轉動機頭，對準並飛抵【市中心圓環紀念碑】',
+    descGamepad: '將 <kbd>左搖桿</kbd> 向左或向右推轉動機頭，飛抵【市中心圓環紀念碑】',
     keysDual: ['key-bot-l1', 'key-bot-l3', 'key-top-l1', 'key-top-l3'],
     keysSingle: ['key-top-l1', 'key-top-l3'],
-    targetText: '偏航轉動機頭，對準並穿過 2 號訓練光圈（平交道上方）',
-    successMsg: 'PERFECT! 航向校正與偏航轉向操作精準！'
+    targetText: '偏航轉動機頭，對準並飛抵市中心圓環紀念碑上空',
+    successMsg: 'PERFECT! 圓環地標航拍構圖與偏航對準精準！'
   },
   {
     step: 4,
-    title: '任務四：橫滾左右平移避障',
-    shortName: '橫滾側飛平移',
-    descDual: '按方向鍵 <kbd>←</kbd> 或 <kbd>→</kbd> 進行側移，不轉機頭側身平移穿過【3號光圈】',
-    descSingle: '按 <kbd>A</kbd> 或 <kbd>D</kbd> 側移，側身平移穿過【3號光圈】',
+    title: '任務四：商辦外牆巡檢（橫滾側飛）',
+    shortName: '商辦外牆巡檢',
+    descDual: '按方向鍵 <kbd>←</kbd> 或 <kbd>→</kbd> 側身平移，沿【金融商辦外牆】飛抵巡檢目標點',
+    descSingle: '按 <kbd>A</kbd> 或 <kbd>D</kbd> 側移，沿【金融商辦外牆】飛抵巡檢目標點',
+    descGamepad: '將 <kbd>右搖桿</kbd> 向左或向右推，沿【金融商辦外牆】側飛至巡檢點',
     keysDual: ['key-bot-r1', 'key-bot-r3'],
     keysSingle: ['key-bot-l1', 'key-bot-l3'],
-    targetText: '橫滾側移平飛，穿過 3 號訓練光圈（中央車站轉角）',
-    successMsg: 'SMOOTH! 橫滾側移操作靈活完成！'
+    targetText: '橫滾側移平飛，完成金融商辦玻璃帷幕外牆巡檢',
+    successMsg: 'SMOOTH! 高樓外牆橫滾側飛巡檢完成！'
   },
   {
     step: 5,
-    title: '任務五：增壓加速與空中急煞',
-    shortName: '增壓衝刺與煞車',
-    descDual: '按住 <kbd>Shift</kbd> 衝刺加速，接近目標時按 <kbd>Space</kbd> 氣動煞車穿過【4號光圈】',
-    descSingle: '按住 <kbd>F</kbd> 推進加速，接近目標時按 <kbd>Space</kbd> 氣動煞車穿過【4號光圈】',
+    title: '任務五：頂樓物資空投（衝刺急煞）',
+    shortName: '頂樓物資空投',
+    descDual: '按住 <kbd>Shift</kbd> 衝刺加速，接近【商業大樓頂樓空投點】時按 <kbd>Space</kbd> 急煞懸停',
+    descSingle: '按住 <kbd>F</kbd> 推進加速，接近【商業大樓頂樓空投點】時按 <kbd>Space</kbd> 急煞懸停',
+    descGamepad: '按住 <kbd>R2</kbd> 加速，接近【商業大樓頂樓空投點】時按 <kbd>L2</kbd> 煞車',
     keysDual: ['key-top-r1'],
     keysSingle: ['key-top-l2'],
-    targetText: '高速衝刺穿過 4 號訓練光圈，並在周邊按 Space 急煞懸停',
-    successMsg: 'AWESOME! 掌握高機動衝刺與急煞懸停！'
+    targetText: '高速飛抵商業大樓頂樓空投點並急煞懸停',
+    successMsg: 'AWESOME! 緊急物資頂樓空投點精準抵達！'
   },
   {
     step: 6,
@@ -4488,6 +6008,7 @@ const TRAINING_TASKS = [
     shortName: '返航精準降落',
     descDual: '綜合運用操控飛回中央 [H] 起降坪！高度低於 2 米後按 <kbd>S</kbd> 緩降接地',
     descSingle: '綜合運用操控飛回中央 [H] 起降坪！按 <kbd>Ctrl</kbd> 或 <kbd>J</kbd> 緩降接地',
+    descGamepad: '飛回中央 [H] 起降坪，將 <kbd>左搖桿</kbd> 輕輕向下推以接地',
     keysDual: ['key-bot-l2'],
     keysSingle: ['key-bot-l2'],
     targetText: '返航飛回市區中央 H 起降坪，緩慢接地並保持靜止降落',
@@ -4530,82 +6051,77 @@ function buildTrainingHoverRing() {
 }
 
 function buildCourseGates() {
-  COURSE_GATES.forEach((g, idx) => {
+  COURSE_GATES.forEach((g) => {
     const group = new THREE.Group();
     group.position.set(g.pos.x, g.pos.y, g.pos.z);
     group.rotation.y = g.rotY;
 
-    // Torus Ring
-    const outerRing = new THREE.Mesh(
-      new THREE.TorusGeometry(g.radius, 0.45, 16, 42),
-      new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.3 })
-    );
-    group.add(outerRing);
-
-    const innerMat = new THREE.MeshBasicMaterial({ color: idx === 0 ? 0x10b981 : 0x00f0ff });
-    const innerRing = new THREE.Mesh(
-      new THREE.TorusGeometry(g.radius - 0.48, 0.22, 12, 42),
-      innerMat
-    );
+    // Option A: Realistic AR Inspection Target Beacon (無浮空大圓環，改用地面/空中 AR 光標導引)
+    const innerMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.DoubleSide
+    });
+    const ringGeo = new THREE.RingGeometry(3.8, 4.5, 36);
+    ringGeo.rotateX(-Math.PI / 2);
+    const innerRing = new THREE.Mesh(ringGeo, innerMat);
+    innerRing.position.y = -g.pos.y + 0.35; // Ground/plaza projection ring
     group.add(innerRing);
 
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false
+    });
+    const beamMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 1.4, Math.max(8, g.pos.y), 16, 1, true), beamMat);
+    beamMesh.position.y = -g.pos.y / 2;
+    group.add(beamMesh);
+
+    const diamondMesh = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.95, 0),
+      innerMat
+    );
+    group.add(diamondMesh);
+
     const labelSprite = createGateNumberSprite(g.id, g.name);
-    labelSprite.position.set(0, g.radius + 2.8, 0);
+    labelSprite.position.set(0, 2.8, 0);
     group.add(labelSprite);
 
     cityGroup.add(group);
-    gateObjects.push({ data: g, group, innerRing, innerMat });
+    gateObjects.push({ data: g, group, innerRing, innerMat, beamMat });
   });
 }
 
 function updateGateVisualStates() {
   const isTraining = state.gameMode === 'training';
+  const isFreeFlight = state.gameMode === 'free_flight';
 
   if (trainingHoverRingGroup) {
     trainingHoverRingGroup.visible = isTraining && state.raceActive && state.trainingStep === 1;
   }
 
   gateObjects.forEach((obj, idx) => {
-    if (state.gameMode === 'free_flight') {
-      obj.innerMat.color.setHex(0x00f0ff);
-      obj.group.scale.setScalar(1.0);
+    if (isFreeFlight) {
+      obj.group.visible = false;
       return;
     }
 
     if (isTraining) {
-      if (state.trainingStep === 1) {
-        obj.innerMat.color.setHex(0x334155);
-        obj.group.scale.setScalar(0.9);
-      } else if (state.trainingStep >= 2 && state.trainingStep <= 5) {
-        const targetGateIdx = state.trainingStep - 2;
-        if (idx < targetGateIdx) {
-          obj.innerMat.color.setHex(0x64748b);
-          obj.group.scale.setScalar(0.95);
-        } else if (idx === targetGateIdx) {
-          obj.innerMat.color.setHex(0x10b981);
-          obj.group.scale.setScalar(1.08);
-        } else {
-          obj.innerMat.color.setHex(0x0284c7);
-          obj.group.scale.setScalar(1.0);
-        }
-      } else {
-        // Step 6: Helipad landing
-        obj.innerMat.color.setHex(0x64748b);
-        obj.group.scale.setScalar(0.95);
-      }
+      const targetIdx = state.trainingStep - 2;
+      obj.group.visible = state.raceActive && state.trainingStep >= 2 && state.trainingStep <= 5 && idx === targetIdx;
+      obj.innerMat.color.setHex(0x10b981);
+      if (obj.beamMat) obj.beamMat.color.setHex(0x10b981);
       return;
     }
 
-    if (idx < state.currentGateIndex) {
-      obj.innerMat.color.setHex(0x64748b);
-      obj.group.scale.setScalar(0.95);
-    } else if (idx === state.currentGateIndex) {
-      obj.innerMat.color.setHex(0x10b981);
-      obj.group.scale.setScalar(1.06);
-    } else {
-      obj.innerMat.color.setHex(0x0284c7);
-      obj.group.scale.setScalar(1.0);
-    }
+    // Time trial / race mode
+    obj.group.visible = idx >= state.currentGateIndex;
+    const isNext = idx === state.currentGateIndex;
+    obj.innerMat.color.setHex(isNext ? 0x10b981 : 0x0284c7);
+    if (obj.beamMat) obj.beamMat.color.setHex(isNext ? 0x10b981 : 0x0284c7);
+    obj.group.scale.setScalar(isNext ? 1.05 : 0.9);
   });
 }
 
@@ -9596,18 +11112,7 @@ function updateDronePhysics(dt) {
   }
   const collisionGroups = inWilderness
     ? [tacticalTargetColliders]
-    : [buildingColliders, movingColliders, crossingBarrierColliders];
-  for (const box of inWilderness ? [] : crossingBarrierColliders) {
-    box.object.updateWorldMatrix(true, false);
-    if (!box.object.geometry.boundingBox) box.object.geometry.computeBoundingBox();
-    const bounds = crossingBarrierBounds.copy(box.object.geometry.boundingBox).applyMatrix4(box.object.matrixWorld);
-    box.minX = bounds.min.x;
-    box.maxX = bounds.max.x;
-    box.minY = bounds.min.y;
-    box.maxY = bounds.max.y;
-    box.minZ = bounds.min.z;
-    box.maxZ = bounds.max.z;
-  }
+    : [buildingColliders, movingColliders];
   for (const box of inWilderness ? [] : movingColliders) {
     box.object.getWorldPosition(colliderCenter);
     const travel = colliderCenter.x - (box.previousX ?? colliderCenter.x);
@@ -10094,25 +11599,6 @@ function updateCameraAndWorldAnimations(dt) {
     if (car.position.x > CITY_BOUNDS.halfWidth) car.position.x = -CITY_BOUNDS.halfWidth;
     if (car.position.x < -CITY_BOUNDS.halfWidth) car.position.x = CITY_BOUNDS.halfWidth;
   }
-
-  if (cityTrain) {
-    if (trainStopRemaining > 0) {
-      trainStopRemaining -= dt;
-    } else {
-      const previousX = cityTrain.position.x;
-      cityTrain.position.x -= 16.5 * dt;
-      if (previousX > 26 && cityTrain.position.x <= 26) {
-        cityTrain.position.x = 26;
-        trainStopRemaining = 4;
-      }
-      if (cityTrain.position.x < -CITY_BOUNDS.halfWidth - 28) cityTrain.position.x = CITY_BOUNDS.halfWidth + 10;
-    }
-    for (const { arm, side, crossX } of crossingArms) {
-      const trainAtCrossing = cityTrain.position.x < crossX + 20 && cityTrain.position.x > crossX - 56;
-      const target = trainAtCrossing ? 0 : -side * Math.PI / 2;
-      arm.rotation.z += (target - arm.rotation.z) * Math.min(1, dt * 4);
-    }
-  }
 }
 
 // ============================================================================
@@ -10265,7 +11751,9 @@ function updateHUD(dt) {
       if (stepTitle) stepTitle.textContent = curTask.title;
       const stepInst = document.getElementById('training-instruction');
       if (stepInst) {
-        stepInst.innerHTML = state.keymapMode === 'dual' ? `${curTask.descDual}` : `${curTask.descSingle}`;
+        const instruction = getFlightGamepad() ? curTask.descGamepad
+          : state.keymapMode === 'dual' ? curTask.descDual : curTask.descSingle;
+        if (stepInst.innerHTML !== instruction) stepInst.innerHTML = instruction;
       }
 
       const barFill = document.getElementById('training-bar-fill');
@@ -10759,14 +12247,13 @@ function drawTacticalMap(ctx, w, h, isFull) {
     CITY.streets.forEach(z => rectangle(0, z, width, CITY.streetWidth, '#526173'));
     cityMapAreas.forEach(area => rectangle(area.x, area.z, area.w, area.d, area.color));
     townMapFeatures.forEach(feature => rectangle(feature.x, feature.z, feature.w, feature.d, feature.color));
-    rectangle(0, RAILWAY_Z, CITY_BOUNDS.halfWidth * 2, 3.2, '#e6ad57');
     if (isFull) {
       ctx.font = 'bold 12px "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.lineWidth = 3;
       ctx.strokeStyle = '#172232';
       ctx.fillStyle = '#f2eee6';
-      const overviewLabels = ['中央車站', '市民公園', '商辦區', '起降廣場'];
+      const overviewLabels = ['市立小學', '市民公園', '商辦區', '起降廣場'];
       cityLandmarks.forEach(({name, x, z}) => {
         if (!overviewLabels.includes(name)) return;
         ctx.strokeText(name, toMapX(x), toMapY(z) - 6);
@@ -11344,9 +12831,27 @@ function updateGCSBottomHints() {
   const isTactical = state.gameMode === 'tactical_strike';
   const bombSpan = isTactical ? '<span id="gcs-hint-bomb"><kbd>B</kbd> 投彈</span>' : '';
 
-  const cacheKey = `${state.keymapMode}_${isTactical}`;
+  const usingGamepad = Boolean(getFlightGamepad());
+  const isDownCam = state.cameraMode === 'down';
+  const cacheKey = `${state.keymapMode}_${isTactical}_${usingGamepad}_${isDownCam}`;
   if (hintsEl._lastKeymap === cacheKey) return;
   hintsEl._lastKeymap = cacheKey;
+
+  if (usingGamepad) {
+    const gamepadBombSpan = isTactical ? '<span id="gcs-hint-bomb"><kbd>B鈕 / A鈕</kbd> 投彈</span>' : '';
+    const zoomSpan = isDownCam ? '<span><kbd>X鈕</kbd> 變焦</span>' : '';
+    hintsEl.innerHTML = `
+      <span><kbd>左搖桿</kbd> 升降／轉向</span>
+      <span><kbd>右搖桿</kbd> 前後／平移</span>
+      ${gamepadBombSpan}
+      ${zoomSpan}
+      <span><kbd>R1</kbd> 視角</span>
+      <span><kbd>L1</kbd> 感光模式</span>
+      <span><kbd>L2</kbd> 懸停</span>
+      <span><kbd>R2</kbd> 衝刺</span>
+    `;
+    return;
+  }
 
   if (isDual) {
     hintsEl.innerHTML = `
@@ -11357,6 +12862,7 @@ function updateGCSBottomHints() {
       <span><kbd>Space</kbd> 懸停</span>
       ${bombSpan}
       <span><kbd>C</kbd> 視角</span>
+      <span><kbd>X</kbd> 感光模式</span>
       <span><kbd>M</kbd> 航圖</span>
     `;
   } else {
@@ -11368,6 +12874,7 @@ function updateGCSBottomHints() {
       <span><kbd>Space</kbd> 懸停</span>
       ${bombSpan}
       <span><kbd>C</kbd> 視角</span>
+      <span><kbd>X</kbd> 感光模式</span>
       <span><kbd>M</kbd> 航圖</span>
     `;
   }
@@ -11704,9 +13211,9 @@ async function startRunSequence(playerNum = 1) {
   state.raceActive = false;
   if (isTacticalMode) return true;
   if (isTrainingRun) {
-    showAnnouncement('FLIGHT TRAINING', state.keymapMode === 'dual' ? '任務 1：起飛並爬升至 10 公尺定高懸停' : '任務 1：按 Shift 或 U 爬升至 10 公尺', '#10b981');
+    showAnnouncement('FLIGHT TRAINING', getFlightGamepad() ? '任務 1：左搖桿向上推至 10 公尺，鬆開或按 L2 懸停' : state.keymapMode === 'dual' ? '任務 1：起飛並爬升至 10 公尺定高懸停' : '任務 1：按 Shift 或 U 爬升至 10 公尺', '#10b981');
   } else {
-    showAnnouncement(`PLAYER ${playerNum} READY`, state.keymapMode === 'dual' ? 'GO 後按 W 上升' : 'GO 後按 Shift 或 U 上升', '#00f0ff');
+    showAnnouncement(`PLAYER ${playerNum} READY`, getFlightGamepad() ? 'GO 後將左搖桿向上推以爬升' : state.keymapMode === 'dual' ? 'GO 後按 W 上升' : 'GO 後按 Shift 或 U 上升', '#00f0ff');
   }
 
 }
@@ -12074,16 +13581,6 @@ function bindUIEvents() {
     }
   };
 
-  function updateMissionSummaryPill(label, accentColor = '#00f0ff') {
-    const labelEl = document.getElementById('menu-active-mission-label');
-    if (labelEl) labelEl.textContent = label;
-    const dotEl = document.querySelector('#menu-selected-mission-pill .mission-pill-dot');
-    if (dotEl) {
-      dotEl.style.background = accentColor;
-      dotEl.style.boxShadow = `0 0 8px ${accentColor}`;
-    }
-  }
-
   function updateTacticalBriefingDialog(exerciseKey) {
     const info = TACTICAL_EXERCISE_BRIEFINGS[exerciseKey] || TACTICAL_EXERCISE_BRIEFINGS.tactical_strike;
     const eyebrowEl = document.getElementById('tactical-briefing-eyebrow');
@@ -12092,7 +13589,17 @@ function bindUIEvents() {
     if (eyebrowEl) eyebrowEl.textContent = info.eyebrow;
     if (titleEl) titleEl.textContent = info.title;
     if (bgEl) bgEl.textContent = info.bg;
+
+    const briefingControlEl = document.querySelector('.briefing-control');
+    if (briefingControlEl) {
+      if (gamepadSelected) {
+        briefingControlEl.innerHTML = '<span>使用</span><kbd>左/右搖桿</kbd><span>飛行，按</span><kbd>R1</kbd><span>切換鏡頭，按</span><kbd>L1</kbd><span>切換熱成像/夜視，按</span><kbd>X鈕</kbd><span>變焦，按</span><kbd>B鈕 / A鈕</kbd><span>投彈。</span>';
+      } else {
+        briefingControlEl.innerHTML = '<span>按</span><kbd>C</kbd><span>切換鏡頭，按</span><kbd>X</kbd><span>切換熱成像/夜視，按</span><kbd>Z</kbd><span>變焦，按</span><kbd>B</kbd><span>投彈。</span>';
+      }
+    }
   }
+  window.updateTacticalBriefingDialog = updateTacticalBriefingDialog;
 
   function animateSubmenuPanelReveal(panelEl) {
     if (!panelEl || typeof gsap === 'undefined') return;
@@ -12177,10 +13684,6 @@ function bindUIEvents() {
       }
     });
 
-    const label = state.selectedRaceSubmode === 'versus_race'
-      ? '飛行競速 — 02 雙人競速'
-      : '飛行競速 — 01 單人計時賽';
-    updateMissionSummaryPill(label, '#00f0ff');
     if (animate && typeof gsap !== 'undefined') {
       const sumEl = document.getElementById('menu-summary-mode');
       if (sumEl) gsap.fromTo(sumEl, { opacity: 0.25, x: -6 }, { opacity: 1, x: 0, duration: 0.25 });
@@ -12212,8 +13715,6 @@ function bindUIEvents() {
     });
 
     updateTacticalBriefingDialog(validKey);
-    const info = TACTICAL_EXERCISE_BRIEFINGS[validKey];
-    updateMissionSummaryPill(info.label, '#ef4444');
   }
 
   function selectMenuCategory(cardOrCategory, { applyPresets = false } = {}) {
@@ -12254,7 +13755,6 @@ function bindUIEvents() {
       }
       const sumEl = document.getElementById('menu-summary-mode');
       if (sumEl && card.dataset.description) sumEl.textContent = card.dataset.description;
-      updateMissionSummaryPill('飛行訓練 — 六階段考照課綱', '#10b981');
       animateSubmenuPanelReveal(trainingPanel);
     } else if (category === 'racing') {
       if (state.sensorMode !== 'visible' && typeof setSensorMode === 'function') {
@@ -12478,6 +13978,7 @@ function bindUIEvents() {
   const briefing = document.getElementById('tactical-briefing');
   document.getElementById('btn-start-flight').addEventListener('click', async () => {
     if (state.gameMode === 'tactical_strike') {
+      updateTacticalBriefingDialog(state.tacticalExercise);
       if (!await startRunSequence(1)) return;
       briefing.returnValue = '';
       briefing.showModal();
@@ -12541,9 +14042,8 @@ function* buildCityWorld() {
   buildCityBackdrop();
   yield '建立街廓與公共設施';
   yield* buildCity();
-  yield '建立起降坪與鐵道';
+  yield '建立起降坪與校園';
   buildCityHelipad();
-  buildRailwayAndCrossing();
   yield '建立商店街與招牌';
   yield* buildTaiwanMarketStreet();
   yield '配置檢查門與交通';
@@ -12558,16 +14058,14 @@ function unloadCityWorld() {
   if (!cityGroup) return;
   disposeWorldObject(cityGroup);
   cityGroup = null;
-  cityTrain = null;
-  trainStopRemaining = 0;
   signalTime = 0;
   updateSignals = () => {};
   trainingHoverRingGroup = null;
   trainingHoverRingMat = null;
   for (const items of [
     buildingColliders, movingColliders, signalIntersections, outerMapRoads,
-    outerMapCourtyards, townMapFeatures, cityMapAreas, cityLandmarks, crossingArms,
-    crossingBarrierColliders, roadVehicles, gateObjects, window.taiwanEmissiveMaterials
+    outerMapCourtyards, townMapFeatures, cityMapAreas, cityLandmarks,
+    roadVehicles, gateObjects, window.taiwanEmissiveMaterials
   ]) items.length = 0;
 }
 

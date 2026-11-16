@@ -3370,6 +3370,7 @@ body:has(#tactical-briefing[open]) :is(#hud-layer, #center-announcement) {
   position: relative;
   flex: 0 0 auto;
   font-family: inherit;
+  line-height: 1.4;
   padding: 5px 10px;
   background: transparent;
   border-color: transparent;
@@ -3397,35 +3398,100 @@ body:has(#tactical-briefing[open]) :is(#hud-layer, #center-announcement) {
 
 #menu-modal .menu-cta-bar {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
   gap: 14px;
 }
 
-.menu-selected-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.78);
-  border: 1px solid rgba(0, 240, 255, 0.25);
+.menu-flight-input {
   font-size: 13px;
   color: #94a3b8;
 }
 
-.menu-selected-summary strong {
-  color: #ffffff;
-  font-weight: 800;
+.menu-flight-input-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.mission-pill-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--cyan);
-  box-shadow: 0 0 8px var(--cyan);
+.menu-flight-input .option-pills {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
+
+.menu-flight-input .opt-pill {
+  min-width: 3.5rem;
+}
+
+.menu-setting-row .opt-pill.calibration-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--cyan);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+#right-stick-dialog {
+  width: min(420px, calc(100% - 32px));
+  margin: auto;
+  padding: 20px;
+  color: var(--text-primary, #e2e8f0);
+}
+
+#right-stick-dialog::backdrop {
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.right-stick-diagram {
+  display: block;
+  width: min(100%, 300px);
+  margin: 12px auto;
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.controller-body {
+  fill: url(#calibration-controller-shell);
+  stroke: #94a3b8;
+}
+
+.controller-labels {
+  fill: #cbd5e1;
+  stroke: none;
+  font: 700 10px system-ui, sans-serif;
+  text-anchor: middle;
+}
+
+.controller-right-stick {
+  fill: url(#calibration-stick-cap);
+  stroke: var(--cyan);
+}
+
+.stick-arrow {
+  display: none;
+  stroke: var(--cyan);
+}
+
+#right-stick-dialog[data-step="right"] .stick-arrow-right,
+#right-stick-dialog[data-step="up"] .stick-arrow-up {
+  display: inline;
+}
+
+.right-stick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+#gamepad-help {
+  overflow-wrap: anywhere;
+}
+
 
 #btn-start-flight {
   font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
@@ -3457,8 +3523,7 @@ body:has(#tactical-briefing[open]) :is(#hud-layer, #center-announcement) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .tier2-nav-bar,
-  #menu-modal .menu-cta-bar {
+  .tier2-nav-bar {
     flex-direction: column;
     align-items: stretch;
   }

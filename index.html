@@ -9,7 +9,7 @@
   <script src="vendor/three.min.js"></script>
   <script src="vendor/gsap.min.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=4.20" />
+  <link rel="stylesheet" href="style.css?v=4.29" />
 </head>
 <body>
   <!-- 3D WebGL Viewport -->
@@ -719,7 +719,7 @@
       <!-- Bottom-Docked 3 Integrated Holographic Mode Nodes (Directly in HUD) -->
       <div class="mode-cards-grid hero-modes-dock" role="tablist" aria-label="三大主要遊戲模式">
         <!-- MODE 01: 飛行訓練 -->
-        <div class="mode-select-card hero-mode-node node-emerald selected" role="tab" tabindex="0" aria-selected="true" data-category="training" data-mode="training" data-description="循序漸進的六階段操作考照課綱！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。" aria-describedby="menu-summary-mode">
+        <div class="mode-select-card hero-mode-node node-emerald selected" role="tab" tabindex="0" aria-selected="true" data-category="training" data-mode="training" data-description="循序漸進的六階段操作考照課綱！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。">
           <span class="hud-node-corner tl"></span><span class="hud-node-corner tr"></span>
           <span class="hud-node-corner bl"></span><span class="hud-node-corner br"></span>
           <div class="hero-node-head">
@@ -740,7 +740,7 @@
         </div>
 
         <!-- MODE 02: 飛行競速 -->
-        <div class="mode-select-card hero-mode-node node-cyan" role="tab" tabindex="0" aria-selected="false" data-category="racing" data-mode="single_race" data-description="高速穿越台灣城中街區 6 座空中檢查門與鐵道平交道！提供「單人計時賽」與「雙人競速」兩種模式。" aria-describedby="menu-summary-mode" aria-controls="submenu-racing" aria-expanded="false">
+        <div class="mode-select-card hero-mode-node node-cyan" role="tab" tabindex="0" aria-selected="false" data-category="racing" data-mode="single_race" data-description="高速穿越台灣城中街區 6 座空中檢查門與鐵道平交道！提供「單人計時賽」與「雙人競速」兩種模式。" aria-controls="submenu-racing" aria-expanded="false">
           <span class="hud-node-corner tl"></span><span class="hud-node-corner tr"></span>
           <span class="hud-node-corner bl"></span><span class="hud-node-corner br"></span>
           <div class="hero-node-head">
@@ -760,7 +760,7 @@
         </div>
 
         <!-- MODE 03: 實戰演練 -->
-        <div class="mode-select-card hero-mode-node node-crimson" role="tab" tabindex="0" aria-selected="false" data-category="tactical" data-mode="tactical_strike" data-description="深入山谷前線執行光學偵蒐與 CCIP 精準打擊！提供「戰場投彈」、「夜間突擊」與「極限飛行（惡劣天候）」三項演練。" aria-describedby="menu-summary-mode" aria-controls="exercise-selector" aria-expanded="false">
+        <div class="mode-select-card hero-mode-node node-crimson" role="tab" tabindex="0" aria-selected="false" data-category="tactical" data-mode="tactical_strike" data-description="深入山谷前線執行光學偵蒐與 CCIP 精準打擊！提供「戰場投彈」、「夜間突擊」與「極限飛行（惡劣天候）」三項演練。" aria-controls="exercise-selector" aria-expanded="false">
           <span class="hud-node-corner tl"></span><span class="hud-node-corner tr"></span>
           <span class="hud-node-corner bl"></span><span class="hud-node-corner br"></span>
           <div class="hero-node-head">
@@ -878,9 +878,6 @@
           </div>
         </div>
 
-        <div class="mode-description-row">
-          <div class="mode-description" id="menu-summary-mode" aria-live="polite">循序漸進的六階段操作考照課綱！依序學習：垂直起降定高、前後俯仰、左右偏航轉向、橫滾側移、衝刺急煞與精準返航降落。</div>
-        </div>
       </div>
 
       <!-- Flight Environment Settings -->
@@ -888,21 +885,19 @@
         <div class="menu-setting-row">
           <div class="setting-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 天色與時段 (T)</div>
           <div class="option-pills" id="opt-time">
-            <button type="button" class="opt-pill active" data-val="day" aria-describedby="menu-summary-time" data-description="光線充足，適合辨識障礙與練習起降。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 白天</button>
-            <button type="button" class="opt-pill" data-val="sunset" aria-describedby="menu-summary-time" data-description="夕陽角度較低，陰影較長。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sunset"></use></svg> 黃昏</button>
-            <button type="button" class="opt-pill" data-val="night" aria-describedby="menu-summary-time" data-description="環境光線較弱，可依燈光和儀表辨識方向。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-moon"></use></svg> 夜晚</button>
+            <button type="button" class="opt-pill active" data-val="day" data-description="光線充足，適合辨識障礙與練習起降。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sun"></use></svg> 白天</button>
+            <button type="button" class="opt-pill" data-val="sunset" data-description="夕陽角度較低，陰影較長。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-sunset"></use></svg> 黃昏</button>
+            <button type="button" class="opt-pill" data-val="night" data-description="環境光線較弱，可依燈光和儀表辨識方向。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-moon"></use></svg> 夜晚</button>
           </div>
-          <div class="weather-impact-summary" id="menu-summary-time" aria-live="polite">光線充足，適合辨識障礙與練習起降。</div>
         </div>
 
         <div class="menu-setting-row">
           <div class="setting-title"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-camera"></use></svg> 攝影機視角 (C)</div>
           <div class="option-pills" id="opt-camera">
-            <button type="button" class="opt-pill active" data-val="chase" aria-describedby="menu-summary-camera" data-description="鏡頭從機身後方跟隨，可同時看到機身與周圍環境。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-chase"></use></svg> 追蹤視角</button>
-            <button type="button" class="opt-pill" data-val="fpv" aria-describedby="menu-summary-camera" data-description="透過機載前向鏡頭飛行，畫面隨機身姿態變化。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-fpv"></use></svg> 第一人稱視角</button>
-            <button type="button" class="opt-pill" data-val="down" aria-describedby="menu-summary-camera" data-description="鏡頭垂直朝向地面，便於觀察正下方。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-down"></use></svg> 垂直下視</button>
+            <button type="button" class="opt-pill active" data-val="chase" data-description="鏡頭從機身後方跟隨，可同時看到機身與周圍環境。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-chase"></use></svg> 追蹤視角</button>
+            <button type="button" class="opt-pill" data-val="fpv" data-description="透過機載前向鏡頭飛行，畫面隨機身姿態變化。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-fpv"></use></svg> 第一人稱視角</button>
+            <button type="button" class="opt-pill" data-val="down" data-description="鏡頭垂直朝向地面，便於觀察正下方。"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-down"></use></svg> 垂直下視</button>
           </div>
-          <div class="weather-impact-summary" id="menu-summary-camera" aria-live="polite">鏡頭從機身後方跟隨，可同時看到機身與周圍環境。</div>
         </div>
 
         <div class="menu-setting-row">
@@ -915,21 +910,21 @@
             <div class="opt-pill" data-val="fog"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-fog"></use></svg> 低能見度</div>
             <div class="opt-pill" data-val="typhoon"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-wind"></use></svg> 颱風驟雨</div>
           </div>
-          <div class="weather-impact-summary" id="weather-impact-badge">
-            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-wind"></use></svg> 風速: <b>0.0 m/s (陣風 0.0)</b></span>
-            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-rain"></use></svg> 下壓氣流: <b>無</b></span>
-            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-battery"></use></svg> 耗電負載: <b>1.00x</b></span>
-            <span class="impact-item"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-check"></use></svg> 操控評估: <b>平穩良好</b></span>
+        </div>
+
+        <div class="menu-setting-row menu-flight-input">
+          <div class="setting-title" id="flight-input-label"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-training"></use></svg> 飛行控制</div>
+          <div class="menu-flight-input-options">
+            <div class="option-pills" id="flight-input" role="group" aria-labelledby="flight-input-label">
+              <button type="button" class="opt-pill active" data-val="keyboard" aria-pressed="true">鍵盤</button>
+              <button type="button" class="opt-pill" data-val="gamepad" aria-pressed="false" aria-describedby="gamepad-help">手把</button>
+            </div>
+            <div id="gamepad-help" hidden>有 ANALOG 鍵的手把請開啟類比模式。 <span id="gamepad-connection-status" role="status"></span> <span id="right-stick-status" role="status"></span> <button type="button" class="opt-pill" id="calibrate-right-stick" hidden>校正右搖桿</button></div>
           </div>
         </div>
       </div>
 
       <div class="cta-row menu-cta-bar">
-        <div class="menu-selected-summary" id="menu-selected-mission-pill">
-          <span class="mission-pill-dot"></span>
-          <span>待命任務：</span>
-          <strong id="menu-active-mission-label">飛行訓練 — 六階段考照課綱</strong>
-        </div>
         <div class="menu-cta-actions">
           <button type="button" class="btn-back-tier1" id="btn-back-tier1">← 返回主畫面</button>
           <button class="primary-btn" id="btn-start-flight"><svg class="menu-icon" aria-hidden="true"><use href="#menu-icon-start"></use></svg> <span lang="zh-TW">起飛</span> <span lang="en">START FLIGHT</span></button>
@@ -937,6 +932,57 @@
       </div>
     </div>
   </div>
+
+  <dialog class="modal-panel" id="right-stick-dialog" aria-labelledby="right-stick-title" aria-describedby="right-stick-instruction">
+    <h2 id="right-stick-title">校正右搖桿</h2>
+    <svg class="right-stick-diagram" viewBox="0 0 360 220" aria-hidden="true">
+      <defs>
+        <linearGradient id="calibration-controller-shell" x2="0" y2="1">
+          <stop stop-color="#3c4a5f"/>
+          <stop offset="1" stop-color="#131e30"/>
+        </linearGradient>
+        <radialGradient id="calibration-stick-cap" cx=".37" cy=".3" r=".68">
+          <stop stop-color="#67e8f9"/>
+          <stop offset="1" stop-color="#155e75"/>
+        </radialGradient>
+      </defs>
+      <g stroke="#7f91a8" fill="#1b2638">
+        <path d="M56 47v-9q0-9 9-9h42q9 0 9 9v9m128 0v-9q0-9 9-9h42q9 0 9 9v9"/>
+        <path d="M62 29v-7q0-6 7-6h34q7 0 7 6v7m140 0v-7q0-6 7-6h34q7 0 7 6v7"/>
+      </g>
+      <path class="controller-body" d="M81 41c-25 0-42 16-48 40l-17 80c-5 24 3 38 18 40 14 2 23-6 35-23l30-40c9 11 20 16 34 16 18 0 31-9 39-24h16c8 15 21 24 39 24 14 0 25-5 34-16l30 40c12 17 21 25 35 23 15-2 23-16 18-40l-17-80c-6-24-23-40-48-40-22 0-38 6-55 15h-88c-17-9-33-15-55-15Z"/>
+      <g fill="#111b2b" stroke="#56677e">
+        <circle cx="83" cy="84" r="34"/>
+        <circle cx="277" cy="84" r="34"/>
+        <circle cx="133" cy="123" r="27"/>
+        <circle cx="227" cy="123" r="27"/>
+        <rect x="151" y="76" width="16" height="7" rx="2"/>
+        <rect x="193" y="76" width="16" height="7" rx="2"/>
+        <rect x="173" y="92" width="14" height="7" rx="2"/>
+      </g>
+      <path fill="#2d3a4d" stroke="#9baabd" d="M77 63h12v15h15v12H89v15H77V90H62V78h15Z"/>
+      <circle cx="133" cy="123" r="19" fill="#334155" stroke="#8ea1b8"/>
+      <circle class="controller-right-stick" cx="227" cy="123" r="19"/>
+      <circle cx="180" cy="110" r="3" fill="#f87171"/>
+      <g fill="#243247" stroke="#64748b">
+        <circle cx="277" cy="65" r="9"/><circle cx="258" cy="84" r="9"/>
+        <circle cx="296" cy="84" r="9"/><circle cx="277" cy="103" r="9"/>
+      </g>
+      <g class="controller-labels">
+        <text x="86" y="26">L2</text><text x="86" y="40">L1</text>
+        <text x="274" y="26">R2</text><text x="274" y="40">R1</text>
+        <text x="277" y="69" fill="#5eead4">Y</text><text x="258" y="88" fill="#f9a8d4">X</text>
+        <text x="296" y="88" fill="#fca5a5">B</text><text x="277" y="107" fill="#93c5fd">A</text>
+      </g>
+      <path class="stick-arrow stick-arrow-right" d="M254 123h80m-13-11 13 11-13 11"/>
+      <path class="stick-arrow stick-arrow-up" d="M227 96V38m-11 13 11-13 11 13"/>
+    </svg>
+    <p id="right-stick-instruction" role="status"></p>
+    <form method="dialog" class="right-stick-actions">
+      <button type="submit" class="secondary-btn" id="right-stick-close">取消</button>
+      <button type="button" class="primary-btn" id="right-stick-start" autofocus>開始校正</button>
+    </form>
+  </dialog>
 
   <dialog class="modal-panel" id="tactical-briefing" aria-labelledby="tactical-briefing-title">
     <header class="briefing-heading"><span id="tactical-briefing-eyebrow">任務提示 // OP-01</span><h2 id="tactical-briefing-title">山谷前線行動</h2></header>
@@ -968,6 +1014,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=4.20"></script>
+  <script src="app.js?v=4.40"></script>
 </body>
 </html>
