@@ -9,7 +9,7 @@
   <script src="vendor/three.min.js"></script>
   <script src="vendor/gsap.min.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=4.29" />
+  <link rel="stylesheet" href="style.css?v=4.37" />
 </head>
 <body>
   <!-- 3D WebGL Viewport -->
@@ -270,9 +270,20 @@
           <span class="tac-ccip-text" id="tactical-ccip-info">CCIP: 自動預測</span>
         </div>
         <div class="tac-row-targets" id="tactical-targets-row">
-          <span class="tac-target-item" id="tac-chip-tank">TANK 坦克 0/2</span>
+          <span class="tac-target-item" id="tac-chip-tank">TANK 戰車 0/2</span>
           <span class="tac-target-item" id="tac-chip-radar">RADAR 雷達 0/1</span>
           <span class="tac-target-item" id="tac-chip-depot">DEPOT 彈藥庫 0/1</span>
+        </div>
+      </div>
+
+      <!-- Radar Warning Receiver / Anti-Air Threat Banner (Matches GCS HUD style) -->
+      <div id="rwr-warning-pill" class="rwr-warning-pill hidden" role="status" aria-live="polite">
+        <span class="rwr-dot"></span>
+        <span id="rwr-warning-text">偵測射控雷達追蹤</span>
+        <div class="rwr-hull-wrap" id="rwr-hull-wrap" aria-label="機體結構完整度">
+          <div class="rwr-hull-bar" aria-hidden="true">
+            <div class="rwr-hull-fill" id="rwr-hull-fill" style="width: 100%;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -323,6 +334,9 @@
         <div class="meter-fill" id="bar-altitude"></div>
       </div>
     </div>
+
+    <!-- Bottom Left: GCS Combat Damage & Telemetry Event Feed -->
+    <div id="gcs-damage-feed" class="gcs-damage-feed" aria-live="polite"></div>
 
     <!-- Bottom Right: Borderless Minimalist Tactical Map (Docked right above bottom letterbox) -->
     <div class="osd-minimap" id="minimap-trigger" title="點擊展開全螢幕航圖 (M)">
@@ -534,37 +548,6 @@
       <div class="intro-flash-shutter" id="intro-flash-shutter"></div>
       <div class="intro-laser-line" id="intro-laser-line"></div>
 
-      <!-- Top & Bottom Widescreen GCS Letterbox Ribbons -->
-      <div class="intro-letterbox top" id="intro-letterbox-top">
-        <div class="lb-left">
-          <span class="lb-dot"></span>
-          <span id="intro-sys-code">SKY-EYE // AERO-X TACTICAL GCS v4.20</span>
-          <span class="lb-sep">|</span>
-          <span id="intro-phase-readout">PHASE 01 // OPTICAL CORE COLD BOOT</span>
-        </div>
-        <div class="lb-right">
-          <span id="intro-telemetry-sat">SAT-LINK: 24 LOCKED</span>
-          <span class="lb-sep">|</span>
-          <span id="intro-telemetry-vtx">VTX: 5.8GHz -38dBm</span>
-        </div>
-      </div>
-
-      <div class="intro-letterbox bottom" id="intro-letterbox-bottom">
-        <div class="lb-left">
-          <span>AIRSPACE: FORMOSA TACTICAL GRID</span>
-          <span class="lb-sep">|</span>
-          <span id="intro-coords-ticker">GPS: N 24°58'42.0" E 121°31'15.0"</span>
-        </div>
-        <div class="lb-center">
-          <div class="intro-progress-track" id="intro-progress-track">
-            <div class="intro-progress-fill" id="intro-progress-fill"></div>
-          </div>
-        </div>
-        <div class="lb-right">
-          <span id="intro-Prompt-hint">CLICK A TACTICAL SECTOR TO CONFIGURE &amp; LAUNCH</span>
-        </div>
-      </div>
-
       <!-- HUD Tactical Corner Brackets & Scramble Telemetry -->
       <div class="intro-hud-corners" id="intro-hud-corners">
         <div class="intro-corner tl" id="intro-corner-tl">
@@ -690,10 +673,10 @@
 
             <!-- Sector 02: Inside Upper-Right Radar -->
             <g class="sector-pin-group" id="sector-pin-2" opacity="0">
-              <circle cx="132" cy="-108" r="5.5" fill="#00f0ff" />
-              <circle cx="132" cy="-108" r="13" stroke="#00f0ff" stroke-width="1.4" stroke-dasharray="4 3" />
-              <polyline class="hud-leader-line" id="leader-line-2" points="132,-108 215,-138 415,-138" stroke="#00f0ff" stroke-width="1.6" stroke-dasharray="360" stroke-dashoffset="360" />
-              <text x="415" y="-147" text-anchor="end" fill="#00f0ff" font-family="var(--font-mono)" font-size="11" font-weight="700">SEC-02 // METRO CIRCUIT</text>
+              <circle cx="155" cy="-52" r="5.5" fill="#00f0ff" />
+              <circle cx="155" cy="-52" r="13" stroke="#00f0ff" stroke-width="1.4" stroke-dasharray="4 3" />
+              <polyline class="hud-leader-line" id="leader-line-2" points="155,-52 230,-40 415,-40" stroke="#00f0ff" stroke-width="1.6" stroke-dasharray="360" stroke-dashoffset="360" />
+              <text x="415" y="-49" text-anchor="end" fill="#00f0ff" font-family="var(--font-mono)" font-size="11" font-weight="700">SEC-02 // METRO CIRCUIT</text>
             </g>
 
             <!-- Sector 03: Inside Lower-Right Radar -->
@@ -712,8 +695,8 @@
     <div class="hero-tier1-stage" id="hero-tier1-stage">
       <!-- Top Integrated Title Emblem -->
       <header class="hero-title-cluster" id="hero-title-cluster">
-        <h1 class="hero-main-title modal-title" id="intro-hero-main">天空之眼：無人機戰術模擬</h1>
-        <p class="hero-sub-title modal-subtitle" id="intro-hero-sub">SKY EYE // UAV TACTICAL SIMULATOR</p>
+        <h1 class="hero-main-title modal-title" id="intro-hero-main"><img class="hero-wordmark" src="sky-eye-wordmark-art.png" alt="天空之眼" /></h1>
+        <p class="hero-sub-title modal-subtitle" id="intro-hero-sub">無人機戰術模擬 <span lang="en">SKY EYE // UAV TACTICAL SIMULATOR</span></p>
       </header>
 
       <!-- Bottom-Docked 3 Integrated Holographic Mode Nodes (Directly in HUD) -->
@@ -849,7 +832,7 @@
             <span class="submenu-hint">點選不同演練項目將自動配置對應戰術環境，亦可於下方手動微調</span>
           </div>
           <div class="submode-cards-row three-cols">
-            <button type="button" class="submode-option exercise-option selected" data-exercise="tactical_strike" data-preset-time="day" data-preset-weather="clear" data-preset-sensor="visible" data-description="01 戰場投彈：日間標準前線演練。深入山谷擊毀 2 輛敵軍巡邏坦克、1 座雷達站與 1 座彈藥庫，並返航臨時放飛點結算。" aria-pressed="true">
+            <button type="button" class="submode-option exercise-option selected" data-exercise="tactical_strike" data-preset-time="day" data-preset-weather="clear" data-preset-sensor="visible" data-description="01 戰場投彈：日間標準前線演練。深入山谷擊毀 2 輛敵軍巡邏戰車、1 座雷達站與 1 座彈藥庫，並返航臨時放飛點結算。" aria-pressed="true">
               <div class="submode-option-top">
                 <span class="submode-code">OP 01 // DAYLIGHT STRIKE</span>
                 <span class="submode-pill pill-crimson">標準實戰</span>
@@ -858,7 +841,7 @@
               <span class="submode-option-desc">日間山谷前線標準打擊，運用垂直光學鏡頭與 CCIP 預測彈道摧毀敵方裝甲與設施。</span>
             </button>
 
-            <button type="button" class="submode-option exercise-option" data-exercise="night_strike" data-preset-time="night" data-preset-weather="cloudy" data-preset-sensor="flir_white" data-description="02 夜間突擊：暗夜低能見度奇襲！自動配置「夜晚 + 白熱熱成像（FLIR）」，透過高熱源特徵鎖定敵軍坦克與防空雷達。" aria-pressed="false">
+            <button type="button" class="submode-option exercise-option" data-exercise="night_strike" data-preset-time="night" data-preset-weather="cloudy" data-preset-sensor="flir_white" data-description="02 夜間突擊：暗夜低能見度奇襲！自動配置「夜晚 + 白熱熱成像（FLIR）」，透過高熱源特徵鎖定敵軍戰車與防空雷達。" aria-pressed="false">
               <div class="submode-option-top">
                 <span class="submode-code">OP 02 // NIGHT FLIR OPS</span>
                 <span class="submode-pill pill-amber">熱成像夜戰</span>
@@ -987,7 +970,7 @@
   <dialog class="modal-panel" id="tactical-briefing" aria-labelledby="tactical-briefing-title">
     <header class="briefing-heading"><span id="tactical-briefing-eyebrow">任務提示 // OP-01</span><h2 id="tactical-briefing-title">山谷前線行動</h2></header>
     <p><strong>背景資訊</strong><span id="tactical-briefing-bg">山谷前線爆發交火。敵軍裝甲巡邏隊控制了谷底道路，山脊雷達站與坡腳彈藥庫仍在運作。你在山脊背坡的臨時放飛點待命。</span></p>
-    <p><strong>任務目標</strong>擊毀 <b class="briefing-target">2 輛敵軍巡邏坦克、1 座雷達站與 1 座彈藥庫</b>。</p>
+    <p><strong>任務目標</strong>擊毀 <b class="briefing-target">2 輛敵軍巡邏戰車、1 座雷達站與 1 座彈藥庫</b>。</p>
     <p><strong>結算條件</strong>全數擊毀或用完 6 枚任務配額後，<b class="briefing-return">返回臨時放飛點，在四角標記之間的淡色十字附近降落結算</b>。</p>
     <p><strong>操作提示</strong><span class="briefing-control"><span>按</span><kbd>C</kbd><span>切換鏡頭，按</span><kbd>X</kbd><span>切換熱成像/夜視，按</span><kbd>Z</kbd><span>變焦，按</span><kbd>B</kbd><span>投彈。</span></span>每次最多掛載 2 枚，可返航補給，整趟任務最多投放 6 枚。</p>
     <form method="dialog">
@@ -1014,6 +997,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=4.40"></script>
+  <script src="app.js?v=4.54"></script>
 </body>
 </html>
